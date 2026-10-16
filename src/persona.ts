@@ -32,6 +32,9 @@ export interface PersonaConfig {
   proofHoldingText?: string;
   qrReplyText?: string;         // text before the QR photo, e.g. "siap bos"
   qrCaption?: string;
+  editPattern?: string;         // regex: member asks to order / price an edit service
+  editCustomPattern?: string;   // regex: custom/complex edit request -> escalate
+  editPricelistCaption?: string;
 }
 
 export const SAFE_DEFAULTS: PersonaConfig = {
@@ -113,6 +116,13 @@ export class PersonaDesk {
   }
   private matches(p: string | undefined, text: string): boolean {
     try { return !!p && new RegExp(p, "i").test(text); } catch { return false; }
+  }
+  /** Member asks about ordering an edit service (not custom/complex). */
+  isEditRequest(text: string): boolean {
+    return this.matches(this.cfg.editPattern, text) && !this.matches(this.cfg.editCustomPattern, text);
+  }
+  isEditCustom(text: string): boolean {
+    return this.matches(this.cfg.editPattern, text) && this.matches(this.cfg.editCustomPattern, text);
   }
   isPayIntent(text: string): boolean {
     const p = this.cfg.payIntentPattern;
@@ -229,7 +239,25 @@ export class PersonaDesk {
       return;
     }
 
-    const payIntent = this.isPayIntent(msg.text);
+    // Edit-service order or price: draft the edit pricelist image (prices live only in the image).
+    const editImg = st.persona?.editPricelistFileId;
+    if (this.isEditRequest(msg.text) && editImg && this.out.toContactPhoto) {
+      const caption = this.cfg.editPricelistCaption || "ini pricelist edit nya bro, kirim materi & brief kalau mau order ya 🙏";
+      if (!this.cfg.approvalMode && this.cfg.autoSend) {
+        await this.out.toContactPhoto(target, editImg, this.withDisclosure(caption));
+        await this.out.toOwner(`🤖 Pricelist edit terkirim otomatis ke ${msg.contactName}.\n${head}`);
+        return;
+      }
+      const id = ++st.seq;
+      st.pending.push({ id, kind: "approval", contactName: msg.contactName, contactChatId: msg.chatId, businessConnectionId: msg.businessConnectionId,
+        incoming: msg.text, draft: caption, photoFileId: editImg, photoCaption: caption, photoOnly: true, created: this.now() });
+      await this.store.put(st);
+      await this.out.toOwner(`🎬 Order edit #${id}\n${head}\n\nDraf:\n📷 foto pricelist edit: "${caption}"`,
+        [[{ text: "✅ Kirim", data: `p:approve:${id}` }, { text: "✏️ Edit", data: `p:edit:${id}` }, { text: "❌ Tolak", data: `p:reject:${id}` }]]);
+      return;
+    }
+    const editCustom = this.isEditCustom(msg.text);
+    const payIntent = !editCustom && this.isPayIntent(msg.text);
     const qr = st.persona?.qrFileId;
     if (payIntent && qr && this.out.toContactPhoto) {
       const reply = this.cfg.qrReplyText || "siap bos 🙏";
@@ -248,7 +276,9 @@ export class PersonaDesk {
         [[{ text: "✅ Kirim", data: `p:approve:${id}` }, { text: "✏️ Edit", data: `p:edit:${id}` }, { text: "❌ Tolak", data: `p:reject:${id}` }]]);
       return;
     }
-    const d = this.isPriceQuestion(msg.text)
+    const d = editCustom
+      ? { reply: "", escalate: true, reason: "permintaan edit custom/kompleks" }
+      : this.isPriceQuestion(msg.text)
       ? { reply: (this.cfg.pricelistText || "cek pricelist di sini ya bro 👉 {url}").replace("{url}", this.cfg.pricelistUrl!), escalate: false, reason: "" }
       : await this.draft(msg);
     if (payIntent && !d.escalate) { d.escalate = true; d.reason = "pelanggan siap bayar"; }
@@ -288,9 +318,17 @@ export class PersonaDesk {
     return "✅ QR pembayaran disimpan. Dipakai saat pelanggan siap bayar.";
   }
 
+  /** Owner sets the edit-service pricelist image (file_id of a photo). */
+  async setEditPricelist(fileId: string): Promise<string> {
+    const st = await this.owner();
+    (st.persona ??= {}).editPricelistFileId = fileId;
+    await this.store.put(st);
+    return "✅ Pricelist edit disimpan. Dikirim (sebagai draf) saat member mau order edit.";
+  }
+
   /** Owner persona-editing commands. Returns null if the text is not one of them. */
   async onOwnerCommand(text: string): Promise<{ text: string; buttons?: Button[][] } | null> {
-    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona|setqr)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
+    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona|setqr|setpricelist)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
     if (!m) return null;
     const cmd = m[1].toLowerCase(), arg = m[2].trim();
     const st = await this.owner();
@@ -309,6 +347,7 @@ export class PersonaDesk {
     }
     switch (cmd) {
       case "persona": return { text: this.describe(st) };
+      case "setpricelist": return { text: "Kirim foto pricelist edit dengan caption /setpricelist, atau balas (reply) fotonya dengan /setpricelist." };
       case "setqr": return { text: "Kirim foto QR dengan caption /setqr, atau balas (reply) foto QR dengan /setqr." };
       case "contoh": {
         if (!arg) return { text: "Contoh: /contoh Them: kak ada promo?\nAdmin: halo kak, cek pin channel ya 🙏" };
@@ -355,6 +394,7 @@ export class PersonaDesk {
       `\nSalam pembuka (18+):\n${eff.ageGateText}`,
       `\nContoh chat: ${o.contoh?.length ?? 0} (lihat /contohku)`,
       `QR pembayaran: ${o.qrFileId ? "✅ tersimpan" : "❌ belum (kirim foto dengan caption /setqr)"}`,
+      `Pricelist edit: ${o.editPricelistFileId ? "✅ tersimpan" : "❌ belum (kirim foto dengan caption /setpricelist)"}`,
       `Pricelist: ${eff.pricelistUrl ?? "-"} | follow-up ${eff.followUpMinutes ?? 0} menit`,
       `\n🔒 Aturan tetap (tidak bisa diubah): tanpa konten eksplisit, blokir di bawah umur, eskalasi harga/bayar/VIP/custom/janji, tidak menyebut Fajrin.`,
     ].join("\n");
@@ -364,7 +404,7 @@ export class PersonaDesk {
   async onOwnerAction(data: string): Promise<string> {
     const st = await this.owner();
     if (data === "pa:on") { (st.persona ??= {}).autoSend = true; await this.store.put(st); return "⚠️ Auto-balas ON. Matikan kapan saja dengan /autobalas off"; }
-    if (data === "pa:reset") { st.persona = { qrFileId: st.persona?.qrFileId }; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
+    if (data === "pa:reset") { st.persona = { qrFileId: st.persona?.qrFileId, editPricelistFileId: st.persona?.editPricelistFileId }; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
     if (data === "pa:cancel") return "Dibatalkan, tidak ada yang berubah.";
     const m = data.match(/^p:(approve|edit|reject):(\d+)$/);
     if (!m) return "Aksi tidak dikenal.";
@@ -374,7 +414,7 @@ export class PersonaDesk {
       if (!p.draft) return "Tidak ada draf. Pakai ✍️ Balas.";
       this.cur = this.effective(st.persona);
       if (p.photoFileId && this.out.toContactPhoto) {
-        await this.out.toContact(this.target(p), p.draft);
+        if (!p.photoOnly) await this.out.toContact(this.target(p), p.draft);
         await this.out.toContactPhoto(this.target(p), p.photoFileId, this.withDisclosure(p.photoCaption || ""));
       } else await this.sendContact(st, this.target(p), p.contactName, this.withDisclosure(p.draft));
       this.drop(st, p.id); await this.store.put(st);

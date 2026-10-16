@@ -119,5 +119,8 @@
   "proofPattern": "\\b(udah|sudah|dah|done) ?(tf|transfer|bayar|trf)\\b|bukti (tf|transfer|bayar)|\\bsudah saya transfer\\b",
   "proofHoldingText": "siap bos, admin cek dulu ya 🙏",
   "qrReplyText": "siap bos 🙏",
-  "qrCaption": "scan ini ya bos, kirim bukti transfer kalau udah"
+  "qrCaption": "scan ini ya bos, kirim bukti transfer kalau udah",
+  "editPattern": "\\b(edit(an)?|foto ?ke ?video|video ?ke ?video|img ?2 ?vid|deep ?fake|face ?swap|ganti muka|tukar muka)\\b",
+  "editCustomPattern": "\\b(custom|kustom|khusus|request khusus|nego|diskon|durasi panjang|full ?movie|bulk|banyak|borongan)\\b",
+  "editPricelistCaption": "ini pricelist edit nya bro, kirim materi & brief kalau mau order ya 🙏"
 }

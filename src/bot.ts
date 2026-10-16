@@ -47,6 +47,7 @@ export function createBot(token: string, store: Store, llm: LLM | null = llmFrom
       if (uid === ownerId) {
         const rp = ctx.message.reply_to_message?.photo;
         if (/^\/setqr\b/i.test(ctx.message.text) && rp?.length) { await ctx.reply(await persona.setQr(rp[rp.length - 1].file_id)); return; }
+        if (/^\/setpricelist\b/i.test(ctx.message.text) && rp?.length) { await ctx.reply(await persona.setEditPricelist(rp[rp.length - 1].file_id)); return; }
         const pc = await persona.onOwnerCommand(ctx.message.text);
         if (pc) { await ctx.reply(pc.text, { reply_markup: kb(pc.buttons) }); return; }
       }
@@ -67,7 +68,9 @@ export function createBot(token: string, store: Store, llm: LLM | null = llmFrom
     const uid = ctx.from.id;
     const ph = ctx.message.photo, fileId = ph[ph.length - 1].file_id, cap = ctx.message.caption ?? "";
     if (uid === ownerId) {
-      await ctx.reply(/^\/setqr\b/i.test(cap) ? await persona.setQr(fileId) : "Foto diterima. Untuk menyimpan sebagai QR pembayaran, kirim dengan caption /setqr.");
+      await ctx.reply(/^\/setqr\b/i.test(cap) ? await persona.setQr(fileId)
+        : /^\/setpricelist\b/i.test(cap) ? await persona.setEditPricelist(fileId)
+        : "Foto diterima. Caption /setqr untuk QR pembayaran, atau /setpricelist untuk pricelist edit.");
       return;
     }
     if (allowed.includes(uid) || !ownerId) return;

@@ -5,7 +5,7 @@ import { MemoryStore } from "../src/store.js";
 const OWNER = 42;
 const URL = "https://esse-kuning-website.vercel.app/";
 type Sent = { to: string; text: string; photo?: string; chatId?: number; buttons?: Button[][] };
-function setup(opts: { auto?: boolean; qr?: boolean } = {}) {
+function setup(opts: { auto?: boolean; qr?: boolean; edit?: boolean } = {}) {
   let now = Date.UTC(2026, 9, 16, 6, 0);
   const sent: Sent[] = [];
   const out: Outbox = {
@@ -21,6 +21,7 @@ function setup(opts: { auto?: boolean; qr?: boolean } = {}) {
   const init = async () => {
     if (opts.auto) { await desk.onOwnerCommand("/autobalas on"); await desk.onOwnerAction("pa:on"); }
     if (opts.qr) await desk.setQr("QR_FILE");
+    if (opts.edit) await desk.setEditPricelist("EDIT_FILE");
   };
   const lastOwnerButton = (i = 0) => [...sent].reverse().find(s => s.to === "owner" && s.buttons)!.buttons![0][i].data;
   return { desk, sent, init, adv: (min: number) => (now += min * 60e3), lastOwnerButton };
@@ -119,5 +120,50 @@ describe("payment", () => {
   it("/persona shows QR status", async () => {
     const { desk, init } = setup({ qr: true }); await init();
     expect((await desk.onOwnerCommand("/persona"))!.text).toContain("QR pembayaran: ✅");
+  });
+});
+
+describe("edit pricelist", () => {
+  const asks = ["mau order edit foto bro", "harga foto ke video berapa?", "bisa video ke video?", "mau deepfake dong", "face swap berapa bro", "minta pricelist edit"];
+  it("edit order/price drafts the edit pricelist image, approve sends photo only", async () => {
+    for (const q of asks) {
+      const { desk, sent, init, lastOwnerButton } = setup({ edit: true, qr: true }); await init();
+      await desk.onIncoming(msg(q));
+      const o = sent.find(s => s.to === "owner")!;
+      expect(o.text, q).toContain("Order edit");
+      expect(toContact(sent), q).toHaveLength(0);
+      await desk.onOwnerAction(lastOwnerButton());
+      const c = toContact(sent);
+      expect(c, q).toHaveLength(1);
+      expect(c[0].photo).toBe("EDIT_FILE");
+      expect(c[0].text).toContain("pricelist edit nya bro");
+      expect(c[0].text).not.toMatch(/\d{3}/);
+    }
+  });
+  it("auto mode sends the image directly", async () => {
+    const { desk, sent, init } = setup({ edit: true, auto: true }); await init();
+    await desk.onIncoming(msg("mau order edit foto"));
+    expect(toContact(sent).at(-1)!.photo).toBe("EDIT_FILE");
+  });
+  it("custom/complex edit requests escalate", async () => {
+    for (const q of ["edit custom durasi panjang bisa?", "deepfake borongan ada diskon?"]) {
+      const { desk, sent, init } = setup({ edit: true, qr: true }); await init();
+      await desk.onIncoming(msg(q));
+      expect(sent.find(s => s.to === "owner")!.text, q).toContain("Perlu kamu jawab");
+      expect(toContact(sent).some(s => s.photo), q).toBe(false);
+    }
+  });
+  it("VIP join price still gets the link", async () => {
+    const { desk, sent, init } = setup({ edit: true }); await init();
+    await desk.onIncoming(msg("harga vip berapa bro?"));
+    expect(sent.find(s => s.to === "owner")!.text).toContain(URL);
+  });
+  it("without an image, falls back to normal flow; /setpricelist and /persona", async () => {
+    const { desk, sent, init } = setup(); await init();
+    await desk.onIncoming(msg("mau order edit foto"));
+    expect(sent.find(s => s.to === "owner")!.text).not.toContain("Order edit");
+    expect((await desk.onOwnerCommand("/setpricelist"))!.text).toContain("/setpricelist");
+    await desk.setEditPricelist("X");
+    expect((await desk.onOwnerCommand("/persona"))!.text).toContain("Pricelist edit: ✅");
   });
 });

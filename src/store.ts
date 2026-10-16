@@ -13,6 +13,7 @@ export interface PersonaOverrides {
   contoh?: { id: number; text: string }[];
   autoSend?: boolean;
   qrFileId?: string;   // Telegram file_id of the payment QR photo
+  editPricelistFileId?: string;   // Telegram file_id of the edit-service pricelist image
 }
 
 export interface FollowUp { chatId: number; businessConnectionId?: string; contactName: string; dueAt: number; }
@@ -28,6 +29,7 @@ export interface Pending {
   followup?: boolean;
   photoFileId?: string;   // photo sent after the draft text (payment QR)
   photoCaption?: string;
+  photoOnly?: boolean;    // send only the photo (caption carries the text)
   reason?: string;
   created: number;
 }
