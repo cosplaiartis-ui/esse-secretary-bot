@@ -6,6 +6,8 @@ export interface Event { id: number; at: number; text: string; hasTime: boolean;
 export interface Note { id: number; text: string; created: number; }
 export interface Task { id: number; text: string; day: string; done: boolean; created: number; }
 
+export interface Money { id: number; amount: number; note: string; at: number; kind: "in" | "out"; }
+
 export interface Pending {
   id: number;
   kind: "approval" | "escalation";
@@ -31,7 +33,9 @@ export interface UserState {
   tasks: Task[];
   pending?: Pending[];        // persona drafts/escalations awaiting the owner
   awaitingReplyFor?: number;
-  seenContacts?: number[];    // chat ids that already got the age gate  // pending id whose reply the owner is typing
+  seenContacts?: number[];
+  money?: Money[];            // owner-only income/expense log
+  lastMoneyReportDay?: string; // YYYY-MM-DD (local) of the last day whose report was sent    // chat ids that already got the age gate  // pending id whose reply the owner is typing
 }
 
 export function newUser(userId: number, chatId: number, tz: string): UserState {

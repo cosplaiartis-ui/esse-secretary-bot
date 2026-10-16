@@ -22,6 +22,10 @@ export const SECRETARY_TOOLS: ToolDef[] = [
   fn("list_tasks", "List tasks"),
   fn("complete_task", "Mark task done by id", { id: N }, ["id"]),
   fn("daily_summary", "Show today's summary"),
+  fn("add_income", "Record income received by the owner. amount is as the user wrote it, e.g. '50rb', '1,5jt', '50000'. note is the source/description, e.g. 'VIP'.", { amount: S, note: S }, ["amount"]),
+  fn("add_expense", "Record an expense. amount as written, e.g. '20rb'.", { amount: S, note: S }, ["amount"]),
+  fn("income_today", "Show today's income total and breakdown"),
+  fn("delete_income", "Delete an income/expense record by id", { id: N }, ["id"]),
 ];
 
 /** Map tool calls to existing slash commands so the rule-based logic stays the single source of truth. */
@@ -40,6 +44,10 @@ export function toolToCommand(name: string, a: Record<string, unknown>): string 
     case "list_tasks": return "/tugasku";
     case "complete_task": return `/selesai ${a.id}`;
     case "daily_summary": return "/ringkas";
+    case "add_income": return `/masuk ${a.amount} ${a.note ?? ""}`.trim();
+    case "add_expense": return `/keluar ${a.amount} ${a.note ?? ""}`.trim();
+    case "income_today": return "/pendapatan";
+    case "delete_income": return `/hapusmasuk ${a.id}`;
     default: return null;
   }
 }

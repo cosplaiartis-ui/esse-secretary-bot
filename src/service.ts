@@ -2,6 +2,7 @@
 import { parseWhen, describeRecur, nextOccurrence } from "./parser.js";
 import { Store, UserState, newUser } from "./store.js";
 import { fmt, fmtTime, dayKey, isValidTz, wallOf, toUtc, addDays } from "./time.js";
+import { parseAmount, rupiah } from "./money.js";
 
 export const DEFAULT_TZ = "Asia/Makassar";
 
@@ -23,6 +24,11 @@ Catatan
 Tugas harian
 /tugas <isi>  /tugasku  /selesai <no>  /hapustugas <no>
 
+Pendapatan (khusus pemilik)
+/masuk <jumlah> [keterangan]  contoh: /masuk 50rb VIP, /masuk 1,5jt endorse
+/keluar <jumlah> [keterangan]  /pendapatan  /hapusmasuk <no>
+Laporan pendapatan kemarin dikirim otomatis tiap jam 00:00.
+
 Pengaturan
 /zona <Area/Kota>  contoh: /zona Asia/Jakarta
 /ringkasan <jam>  jam ringkasan pagi (default 7), /ringkasan off
@@ -31,7 +37,8 @@ Pengaturan
 Tip: kirim teks biasa yang diawali "ingatkan ..." juga bisa.`;
 
 export class Secretary {
-  constructor(private store: Store, private now: () => number = Date.now) {}
+  /** ownerId: only this user may use income commands (undefined = any allowed user, used in tests/console). */
+  constructor(private store: Store, private now: () => number = Date.now, private ownerId?: number) {}
 
   async load(userId: number, chatId: number): Promise<UserState> {
     return (await this.store.get(userId)) ?? newUser(userId, chatId, DEFAULT_TZ);
@@ -97,6 +104,17 @@ export class Secretary {
         st.summaryHour = h; return `☀️ Ringkasan pagi akan dikirim jam ${h}:00.`;
       }
       case "ringkas": case "summary": return this.summary(st);
+      case "masuk": case "keluar": case "pendapatan": case "hapusmasuk":
+        if (this.ownerId !== undefined && st.userId !== this.ownerId) return "Perintah ini khusus pemilik.";
+        if (cmd === "pendapatan") return this.moneyReport(st, dayKey(nowMs, tz), "💰 Pendapatan hari ini");
+        if (cmd === "hapusmasuk") {
+          const id = parseInt(arg.replace("#", ""));
+          const i = (st.money ?? []).findIndex(x => x.id === id);
+          if (i < 0) return `Catatan #${arg || "?"} tidak ditemukan.`;
+          const [x] = st.money!.splice(i, 1);
+          return `🗑️ #${id} dihapus (${rupiah(x.amount)}${x.note ? " " + x.note : ""}).`;
+        }
+        return this.addMoney(st, arg, cmd === "masuk" ? "in" : "out");
       case "": {
         if (/^(ingatkan|ingetin|remind)/i.test(text)) return this.addReminder(st, text);
         if (/^(jadwalkan|schedule)/i.test(text)) return this.addEvent(st, text);
@@ -130,6 +148,40 @@ export class Secretary {
     if (!st.reminders.length) return "Belum ada pengingat.";
     return "⏰ Pengingat:\n" + [...st.reminders].sort((a, b) => a.at - b.at)
       .map(r => `#${r.id} ${fmt(r.at, st.tz)}${r.recur ? ` (${describeRecur(r.recur)})` : ""}: ${r.text}`).join("\n");
+  }
+
+  private addMoney(st: UserState, arg: string, kind: "in" | "out"): string {
+    const p = parseAmount(arg);
+    if (!p) return kind === "in" ? "Contoh: /masuk 50rb VIP, /masuk 1,5jt endorse, /masuk 50.000" : "Contoh: /keluar 20rb kuota";
+    const id = ++st.seq;
+    const note = p.rest || (kind === "in" ? "lainnya" : "pengeluaran");
+    if (!st.money) {
+      st.money = [];
+      st.lastMoneyReportDay ??= dayKey(toUtc({ ...addDays(wallOf(this.now(), st.tz), -1), h: 12, mi: 0 }, st.tz), st.tz);
+    }
+    st.money.push({ id, amount: p.amount, note, at: this.now(), kind });
+    const total = this.dayTotals(st, dayKey(this.now(), st.tz));
+    return `${kind === "in" ? "💰 Masuk" : "💸 Keluar"} #${id}: ${rupiah(p.amount)} (${note}) pada ${fmt(this.now(), st.tz)}.\nTotal masuk hari ini: ${rupiah(total.inSum)}`;
+  }
+
+  private dayTotals(st: UserState, day: string) {
+    const items = (st.money ?? []).filter(x => dayKey(x.at, st.tz) === day);
+    const ins = items.filter(x => x.kind === "in"), outs = items.filter(x => x.kind === "out");
+    return { ins, outs, inSum: ins.reduce((a, x) => a + x.amount, 0), outSum: outs.reduce((a, x) => a + x.amount, 0) };
+  }
+
+  moneyReport(st: UserState, day: string, title: string): string {
+    const t = this.dayTotals(st, day);
+    const group = (xs: typeof t.ins) => {
+      const g = new Map<string, { n: number; sum: number }>();
+      for (const x of xs) { const k = x.note.toLowerCase(); const v = g.get(k) ?? { n: 0, sum: 0 }; v.n++; v.sum += x.amount; g.set(k, v); }
+      return [...g].sort((a, b) => b[1].sum - a[1].sum).map(([k, v]) => `• ${k}: ${rupiah(v.sum)} (${v.n}x)`).join("\n");
+    };
+    const lines = [`${title} (${day})`, `Jumlah transaksi masuk: ${t.ins.length}`, `Total masuk: ${rupiah(t.inSum)}`];
+    if (t.ins.length) lines.push("Rincian:\n" + group(t.ins));
+    if (t.outs.length) lines.push(`Total keluar: ${rupiah(t.outSum)} (${t.outs.length}x)\n` + group(t.outs), `Bersih: ${rupiah(t.inSum - t.outSum)}`);
+    if (t.ins.length || t.outs.length) lines.push("Detail:\n" + [...t.ins, ...t.outs].map(x => `#${x.id} ${fmtTime(x.at, st.tz)} ${x.kind === "in" ? "+" : "-"}${rupiah(x.amount)} ${x.note}`).join("\n"));
+    return lines.join("\n");
   }
 
   agenda(st: UserState, days: number): string {
@@ -204,6 +256,17 @@ export class Secretary {
       if (st.summaryHour >= 0 && w.h >= st.summaryHour && st.lastSummaryDay !== today) {
         out.push({ chatId: st.chatId, text: this.summary(st) });
         st.lastSummaryDay = today; changed = true;
+      }
+      // Daily income report for the previous local day, sent once, with catch-up if ticks are late.
+      if (st.money !== undefined && (this.ownerId === undefined || st.userId === this.ownerId)) {
+        if (!st.lastMoneyReportDay) { st.lastMoneyReportDay = dayKey(toUtc({ ...addDays(w, -1), h: 12, mi: 0 }, st.tz), st.tz); changed = true; }
+        const yesterday = dayKey(toUtc({ ...addDays(w, -1), h: 12, mi: 0 }, st.tz), st.tz);
+        if (st.lastMoneyReportDay < yesterday) {
+          out.push({ chatId: st.chatId, text: this.moneyReport(st, yesterday, "📊 Laporan pendapatan kemarin") });
+          st.lastMoneyReportDay = yesterday; changed = true;
+        }
+        const keep = now - 90 * 86400e3;
+        if (st.money.some(x => x.at < keep)) { st.money = st.money.filter(x => x.at >= keep); changed = true; }
       }
       const evBefore = st.events.length, tBefore = st.tasks.length;
       st.events = st.events.filter(e => e.at > now - 30 * 86400e3);
