@@ -156,3 +156,17 @@ Flow for an incoming third-party message:
   breakdown by keterangan) once the local date has changed, i.e. at 00:00 Asia/Makassar or at the first
   later tick (catch-up). `lastMoneyReportDay` guarantees once per day. Records older than 90 days are pruned.
 - Persona mode never reads or exposes this data.
+
+## v4: Sales flow (pricelist, follow-up, payment QR)
+- Plain price/paket/list questions (no payment intent, no other escalation topic such as diskon/custom)
+  are answered with `pricelistText` + `pricelistUrl` instead of escalation (`isPriceQuestion`).
+- Follow-up: when a message containing the pricelist link is actually sent to a customer, a follow-up is
+  scheduled `followUpMinutes` (5) later. The tick creates it once per conversation (`followedUp`):
+  draft for approval in approval mode, sent directly (copy to owner) in auto mode. Any customer reply
+  cancels it. Precision depends on the tick interval (5 min cron, so roughly 5 to 10 minutes).
+- Ready to pay (`payIntentPattern`): if a QR is stored, reply `qrReplyText` ("siap bos") + QR photo with
+  `qrCaption`; draft in approval mode. Without a QR it escalates with `payHoldingText`.
+- Payment proof (any photo from a customer, or `proofPattern` like "udah transfer"): always escalated to
+  the owner (photo forwarded). The bot never confirms payment or grants VIP access.
+- QR is stored as a Telegram `file_id` in the owner's persona record in Upstash (never in the repo).
+  Owner replaces it by sending a photo with caption `/setqr` (or replying `/setqr` to a photo).
