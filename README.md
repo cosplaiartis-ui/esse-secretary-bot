@@ -15,7 +15,7 @@ For long polling: `TELEGRAM_BOT_TOKEN=... ALLOWED_USER_IDS=<id> npm run dev` (in
 
 ## Commands
 /ingat, /pengingat, /hapusingat, /jadwal, /hariini, /mingguini, /hapusjadwal, /catat, /catatan, /cari,
-/hapuscatat, /tugas, /tugasku, /selesai, /hapustugas, /zona, /ringkasan, /ringkas, /help.
+/hapuscatat, /masuk, /keluar, /pendapatan, /hapusmasuk (owner), /tugas, /tugasku, /selesai, /hapustugas, /zona, /ringkasan, /ringkas, /help.
 Plain text starting with "ingatkan ..." or "remind ..." also works.
 
 ## Deploy (only after approval)

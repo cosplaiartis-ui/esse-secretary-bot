@@ -19,10 +19,10 @@ const kb = (rows?: Button[][]) => {
 
 export function createBot(token: string, store: Store, llm: LLM | null = llmFromEnv()): Bot {
   const bot = new Bot(token);
-  const sec = new Secretary(store);
-  const brain = new SecretaryBrain(sec, llm);
   const allowed = allowlist();
   const ownerId = Number(process.env.OWNER_USER_ID) || allowed[0];
+  const sec = new Secretary(store, Date.now, ownerId);
+  const brain = new SecretaryBrain(sec, llm);
   const out: Outbox = {
     toOwner: async (text, buttons) => { if (ownerId) await bot.api.sendMessage(ownerId, text, { reply_markup: kb(buttons) }); },
     toContact: async (t, text) => { await bot.api.sendMessage(t.chatId, text, t.businessConnectionId ? { business_connection_id: t.businessConnectionId } : {}); },
