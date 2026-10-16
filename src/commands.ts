@@ -33,6 +33,7 @@ export const OWNER_COMMANDS: { command: string; description: string }[] = [
   { command: "contoh", description: "🎭 Tambah contoh gaya chat" },
   { command: "contohku", description: "🎭 Daftar contoh chat" },
   { command: "hapuscontoh", description: "🎭 Hapus contoh <no>" },
+  { command: "setqr", description: "🎭 Ganti QR pembayaran (kirim foto + /setqr)" },
   { command: "autobalas", description: "🎭 Auto-balas on/off (default off)" },
   { command: "resetpersona", description: "🎭 Reset persona ke default" },
   { command: "help", description: "❓ Daftar perintah lengkap" },

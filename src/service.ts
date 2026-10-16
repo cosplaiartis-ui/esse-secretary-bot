@@ -59,6 +59,7 @@ Tekan ✅ Kirim / ✏️ Edit / ❌ Tolak, atau:
 /setlayanan <teks>  /setvip <teks>  /setinfo <teks>
 /salam <teks>  salam pembuka (kalimat 18+ selalu ada)
 /contoh <chat>  /contohku  /hapuscontoh <no>
+/setqr  kirim foto QR dengan caption /setqr untuk mengganti QR pembayaran
 /autobalas on|off  default off (semua balasan menunggu persetujuanmu)
 /resetpersona  kembali ke default
    Aturan keamanan (konten eksplisit, di bawah umur, harga/bayar/VIP) tidak bisa diubah.
