@@ -167,3 +167,31 @@ describe("edit pricelist", () => {
     expect((await desk.onOwnerCommand("/persona"))!.text).toContain("Pricelist edit: ✅");
   });
 });
+
+describe("payment mode", () => {
+  const BCA = "transfer ke BCA 6042976624 a.n. MF";
+  it("BCA mode drafts transfer text (no QR, no follow-up); /bayarqris switches back", async () => {
+    const { desk, sent, init, lastOwnerButton, adv } = setup({ qr: true }); await init();
+    expect((await desk.onOwnerCommand("/bayarbca"))!.text).toContain("BCA");
+    expect((await desk.onOwnerCommand("/persona"))!.text).toContain("Mode bayar: 🏦 BCA");
+    await desk.onIncoming(msg("mau join bayar gimana"));
+    expect(sent.at(-1)!.text).toContain(BCA);
+    await desk.onOwnerAction(lastOwnerButton());
+    const c = toContact(sent);
+    expect(c).toHaveLength(1); expect(c[0].photo).toBeUndefined(); expect(c[0].text).toContain(BCA);
+    adv(10); expect(await desk.tickFollowups()).toBe(0);
+    await desk.onOwnerCommand("/bayarqris");
+    expect((await desk.onOwnerCommand("/persona"))!.text).toContain("Mode bayar: 📷 QRIS");
+    await desk.onIncoming(msg("mau join bayar gimana", 8));
+    await desk.onOwnerAction(lastOwnerButton());
+    expect(toContact(sent).at(-1)!.photo).toBe("QR_FILE");
+  });
+  it("BCA auto mode sends text; proof still escalates", async () => {
+    const { desk, sent, init } = setup({ auto: true, qr: true }); await init();
+    await desk.onOwnerCommand("/bayarbca");
+    await desk.onIncoming(msg("mau transfer"));
+    expect(toContact(sent).at(-1)!.text).toContain(BCA);
+    await desk.onIncoming(msg("", 7, "PROOF"));
+    expect(sent.find(s => s.to === "owner" && s.text.includes("Cek pembayaran"))).toBeTruthy();
+  });
+});

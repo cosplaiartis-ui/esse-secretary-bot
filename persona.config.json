@@ -122,5 +122,6 @@
   "qrCaption": "scan ini ya bos, kirim bukti transfer kalau udah",
   "editPattern": "\\b(edit(an)?|foto ?ke ?video|video ?ke ?video|img ?2 ?vid|deep ?fake|face ?swap|ganti muka|tukar muka)\\b",
   "editCustomPattern": "\\b(custom|kustom|khusus|request khusus|nego|diskon|durasi panjang|full ?movie|bulk|banyak|borongan)\\b",
-  "editPricelistCaption": "ini pricelist edit nya bro, kirim materi & brief kalau mau order ya 🙏"
+  "editPricelistCaption": "ini pricelist edit nya bro, kirim materi & brief kalau mau order ya 🙏",
+  "bcaText": "siap bos 🙏 transfer ke BCA 6042976624 a.n. MF ya, no rek juga ada di link https://esse-kuning-website.vercel.app/ . kirim bukti transfer kalau udah"
 }

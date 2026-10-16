@@ -32,6 +32,7 @@ export interface PersonaConfig {
   proofHoldingText?: string;
   qrReplyText?: string;         // text before the QR photo, e.g. "siap bos"
   qrCaption?: string;
+  bcaText?: string;             // ready-to-pay reply when payment mode is BCA
   editPattern?: string;         // regex: member asks to order / price an edit service
   editCustomPattern?: string;   // regex: custom/complex edit request -> escalate
   editPricelistCaption?: string;
@@ -258,6 +259,21 @@ export class PersonaDesk {
     }
     const editCustom = this.isEditCustom(msg.text);
     const payIntent = !editCustom && this.isPayIntent(msg.text);
+    if (payIntent && st.persona?.payMode === "bca") {
+      const reply = this.cfg.bcaText || "siap bos 🙏 transfer ke BCA 6042976624 a.n. MF ya, no rek juga ada di link https://esse-kuning-website.vercel.app/ . kirim bukti transfer kalau udah";
+      if (!this.cfg.approvalMode && this.cfg.autoSend) {
+        await this.out.toContact(target, this.withDisclosure(reply));
+        await this.out.toOwner(`🤖 Info transfer BCA terkirim otomatis ke ${msg.contactName}.\n${head}`);
+        return;
+      }
+      const id = ++st.seq;
+      st.pending.push({ id, kind: "approval", contactName: msg.contactName, contactChatId: msg.chatId, businessConnectionId: msg.businessConnectionId,
+        incoming: msg.text, draft: reply, noFollowup: true, created: this.now() });
+      await this.store.put(st);
+      await this.out.toOwner(`💳 Pelanggan siap bayar #${id} (mode BCA)\n${head}\n\nDraf:\n"${reply}"`,
+        [[{ text: "✅ Kirim", data: `p:approve:${id}` }, { text: "✏️ Edit", data: `p:edit:${id}` }, { text: "❌ Tolak", data: `p:reject:${id}` }]]);
+      return;
+    }
     const qr = st.persona?.qrFileId;
     if (payIntent && qr && this.out.toContactPhoto) {
       const reply = this.cfg.qrReplyText || "siap bos 🙏";
@@ -328,7 +344,7 @@ export class PersonaDesk {
 
   /** Owner persona-editing commands. Returns null if the text is not one of them. */
   async onOwnerCommand(text: string): Promise<{ text: string; buttons?: Button[][] } | null> {
-    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona|setqr|setpricelist)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
+    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona|setqr|setpricelist|bayarbca|bayarqris)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
     if (!m) return null;
     const cmd = m[1].toLowerCase(), arg = m[2].trim();
     const st = await this.owner();
@@ -347,6 +363,8 @@ export class PersonaDesk {
     }
     switch (cmd) {
       case "persona": return { text: this.describe(st) };
+      case "bayarbca": o.payMode = "bca"; return save("🏦 Mode bayar: BCA. Pelanggan siap bayar dapat draf info transfer BCA (bukan QR). Balik ke QR: /bayarqris");
+      case "bayarqris": o.payMode = "qris"; return save(`📷 Mode bayar: QRIS. ${o.qrFileId ? "QR dikirim saat pelanggan siap bayar." : "QR belum ada, kirim foto dengan caption /setqr."}`);
       case "setpricelist": return { text: "Kirim foto pricelist edit dengan caption /setpricelist, atau balas (reply) fotonya dengan /setpricelist." };
       case "setqr": return { text: "Kirim foto QR dengan caption /setqr, atau balas (reply) foto QR dengan /setqr." };
       case "contoh": {
@@ -394,6 +412,7 @@ export class PersonaDesk {
       `\nSalam pembuka (18+):\n${eff.ageGateText}`,
       `\nContoh chat: ${o.contoh?.length ?? 0} (lihat /contohku)`,
       `QR pembayaran: ${o.qrFileId ? "✅ tersimpan" : "❌ belum (kirim foto dengan caption /setqr)"}`,
+      `Mode bayar: ${o.payMode === "bca" ? "🏦 BCA (transfer)" : "📷 QRIS"} (ganti: /bayarbca, /bayarqris)`,
       `Pricelist edit: ${o.editPricelistFileId ? "✅ tersimpan" : "❌ belum (kirim foto dengan caption /setpricelist)"}`,
       `Pricelist: ${eff.pricelistUrl ?? "-"} | follow-up ${eff.followUpMinutes ?? 0} menit`,
       `\n🔒 Aturan tetap (tidak bisa diubah): tanpa konten eksplisit, blokir di bawah umur, eskalasi harga/bayar/VIP/custom/janji, tidak menyebut Fajrin.`,
@@ -404,7 +423,7 @@ export class PersonaDesk {
   async onOwnerAction(data: string): Promise<string> {
     const st = await this.owner();
     if (data === "pa:on") { (st.persona ??= {}).autoSend = true; await this.store.put(st); return "⚠️ Auto-balas ON. Matikan kapan saja dengan /autobalas off"; }
-    if (data === "pa:reset") { st.persona = { qrFileId: st.persona?.qrFileId, editPricelistFileId: st.persona?.editPricelistFileId }; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
+    if (data === "pa:reset") { st.persona = { qrFileId: st.persona?.qrFileId, editPricelistFileId: st.persona?.editPricelistFileId, payMode: st.persona?.payMode }; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
     if (data === "pa:cancel") return "Dibatalkan, tidak ada yang berubah.";
     const m = data.match(/^p:(approve|edit|reject):(\d+)$/);
     if (!m) return "Aksi tidak dikenal.";
@@ -416,7 +435,8 @@ export class PersonaDesk {
       if (p.photoFileId && this.out.toContactPhoto) {
         if (!p.photoOnly) await this.out.toContact(this.target(p), p.draft);
         await this.out.toContactPhoto(this.target(p), p.photoFileId, this.withDisclosure(p.photoCaption || ""));
-      } else await this.sendContact(st, this.target(p), p.contactName, this.withDisclosure(p.draft));
+      } else if (p.noFollowup) await this.out.toContact(this.target(p), this.withDisclosure(p.draft));
+      else await this.sendContact(st, this.target(p), p.contactName, this.withDisclosure(p.draft));
       this.drop(st, p.id); await this.store.put(st);
       return `✅ Terkirim ke ${p.contactName}.`;
     }

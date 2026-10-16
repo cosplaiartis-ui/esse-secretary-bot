@@ -13,7 +13,8 @@ export interface PersonaOverrides {
   contoh?: { id: number; text: string }[];
   autoSend?: boolean;
   qrFileId?: string;   // Telegram file_id of the payment QR photo
-  editPricelistFileId?: string;   // Telegram file_id of the edit-service pricelist image
+  editPricelistFileId?: string;
+  payMode?: "qris" | "bca";   // ready-to-pay reply: QR photo (default) or bank transfer text   // Telegram file_id of the edit-service pricelist image
 }
 
 export interface FollowUp { chatId: number; businessConnectionId?: string; contactName: string; dueAt: number; }
@@ -29,7 +30,8 @@ export interface Pending {
   followup?: boolean;
   photoFileId?: string;   // photo sent after the draft text (payment QR)
   photoCaption?: string;
-  photoOnly?: boolean;    // send only the photo (caption carries the text)
+  photoOnly?: boolean;
+  noFollowup?: boolean;   // send as-is, never schedule the pricelist follow-up    // send only the photo (caption carries the text)
   reason?: string;
   created: number;
 }

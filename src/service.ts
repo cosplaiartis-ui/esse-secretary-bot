@@ -60,6 +60,7 @@ Tekan ✅ Kirim / ✏️ Edit / ❌ Tolak, atau:
 /salam <teks>  salam pembuka (kalimat 18+ selalu ada)
 /contoh <chat>  /contohku  /hapuscontoh <no>
 /setqr  kirim foto QR dengan caption /setqr untuk mengganti QR pembayaran
+/bayarbca  mode bayar transfer BCA   /bayarqris  kembali ke QRIS
 /setpricelist  kirim foto pricelist edit dengan caption /setpricelist
 /autobalas on|off  default off (semua balasan menunggu persetujuanmu)
 /resetpersona  kembali ke default
