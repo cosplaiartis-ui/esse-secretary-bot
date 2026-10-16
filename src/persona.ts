@@ -63,6 +63,7 @@ export interface Outbox {
   toOwnerPhoto?(fileId: string, caption: string, buttons?: Button[][]): Promise<void>;
 }
 
+export type FaqEntry = { id: number; q: string; a: string };
 export interface Incoming { contactName: string; chatId: number; businessConnectionId?: string; text: string; photoFileId?: string }
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
@@ -73,14 +74,15 @@ export class PersonaDesk {
     private persona: { config: PersonaConfig; text: string }, private now: () => number = Date.now,
   ) {}
 
-  private cur?: { config: PersonaConfig; text: string };
+  private cur?: { config: PersonaConfig; text: string; faq?: FaqEntry[] };
+  private get faq(): FaqEntry[] { return this.cur?.faq ?? []; }
   private get cfg() { return this.cur?.config ?? this.persona.config; }
   private get text() { return this.cur?.text ?? this.persona.text; }
 
   /** Merge owner overrides (soft fields only). Hard rules (blockPatterns, escalationKeywords, refusal, brand) stay fixed. */
-  effective(o?: PersonaOverrides): { config: PersonaConfig; text: string } {
+  effective(o?: PersonaOverrides): { config: PersonaConfig; text: string; faq: FaqEntry[] } {
     const base = this.persona;
-    if (!o) return base;
+    if (!o) return { ...base, faq: [] };
     const config = { ...base.config };
     if (o.autoSend !== undefined) { config.autoSend = o.autoSend; config.approvalMode = !o.autoSend; }
     if (o.salam) config.ageGateText = /18/.test(o.salam) ? o.salam : `${o.salam}\n\nLayanan ini khusus 18+ (dewasa).`;
@@ -91,7 +93,7 @@ export class PersonaDesk {
     if (o.info) parts.push(`## Other business info (owner override)\n${o.info}`);
     if (o.contoh?.length) parts.push(`## Chat-style examples (owner)\n${o.contoh.map(c => c.text).join("\n---\n")}`);
     const text = parts.length ? `${base.text}\n\n# Owner overrides (take precedence over TODO placeholders above; hard rules still apply)\n\n${parts.join("\n\n")}` : base.text;
-    return { config, text };
+    return { config, text, faq: o.faq ?? [] };
   }
   private withDisclosure(t: string) { return this.cfg.discloseAI ? `${t}\n\n${this.cfg.disclosureText}` : t; }
 
@@ -171,8 +173,24 @@ export class PersonaDesk {
     return this.cfg.blockPatterns.find(p => { try { return new RegExp(p, "i").test(text); } catch { return false; } }) ?? null;
   }
 
+  /** FAQ entries whose question shares a meaningful word with the message. */
+  faqMatches(text: string): FaqEntry[] {
+    const stop = new Set(["yang", "ada", "apa", "dan", "itu", "ini", "bro", "kak", "gan", "dong", "sih", "nya", "bisa", "gak", "ga", "nggak", "ngga", "saya", "aku", "kalau", "kalo", "mau", "udah", "sudah"]);
+    const words = (t: string) => t.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !stop.has(w));
+    const m = new Set(words(text));
+    return this.faq.filter(f => words(f.q).some(w => m.has(w)));
+  }
+  /** Escalation keywords that a FAQ answer can never override (money talk, nego, refunds, age, explicit, identity). */
+  private hardKeywordHit(text: string): string | null {
+    const soft = new Set([...(this.cfg.priceWords ?? []), "order", "pesanan", "request", "req", "link grup"].map(w => w.toLowerCase()));
+    const t = text.toLowerCase();
+    return this.cfg.escalationKeywords.find(k => !soft.has(k.toLowerCase()) &&
+      new RegExp(`(^|[^a-z])${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`, "i").test(t)) ?? null;
+  }
+
   async draft(msg: Incoming): Promise<{ reply: string; escalate: boolean; reason: string }> {
-    const kw = this.keywordHit(msg.text);
+    const faq = this.faqMatches(msg.text);
+    const kw = faq.length ? this.hardKeywordHit(msg.text) : this.keywordHit(msg.text);
     if (kw) return { reply: "", escalate: true, reason: `topik sensitif/komitmen: "${kw}"` };
     if (!this.llm) return { reply: "", escalate: true, reason: "LLM tidak tersedia" };
     try {
@@ -184,14 +202,22 @@ export class PersonaDesk {
             `Rules: never write sexual or explicit content; never state prices, payments, VIP access, subscriptions, ` +
             `custom requests, deadlines, promises or commitments; never mention any other brand or the owner's identity; ` +
             `if unsure or the message touches any of those, or age/consent, set escalate=true with reply "". ` +
-            `Return JSON {"reply": string, "escalate": boolean, "reason": string}. Reply in the sender's language.` },
+            `Return JSON {"reply": string, "escalate": boolean, "reason": string}. Reply in the sender's language.` +
+            (this.faq.length ? `\n\n## Owner FAQ (authoritative)\nIf the message asks one of these, answer using ONLY the owner's answer, rephrased short and casual in his style ("bro"), and do not escalate. ` +
+              `Never add facts, numbers or promises that are not in the answer. If no entry fits, follow the rules above.\n` +
+              this.faq.map(f => `Q: ${f.q}\nA: ${f.a}`).join("\n\n") : "") },
           { role: "user", content: `Message from ${msg.contactName}:\n${msg.text}` },
         ],
       });
       const j = JSON.parse(r.content || "{}");
       const reply = typeof j.reply === "string" ? j.reply.trim() : "";
       if (j.escalate === true || !reply) return { reply, escalate: true, reason: String(j.reason || "model tidak yakin") };
-      const kw2 = this.keywordHit(reply); // also guard the model's own output
+      // Also guard the model's own output; words taken from the owner's matched FAQ answers are allowed.
+      const fromFaq = faq.map(f => f.a.toLowerCase()).join(" ");
+      const kw2 = faq.length ? (this.hardKeywordHit(reply) ?? this.cfg.escalationKeywords.find(k => !fromFaq.includes(k.toLowerCase()) &&
+        new RegExp(`(^|[^a-z])${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`, "i").test(reply)) ?? null)
+        : this.keywordHit(reply);
+      if (kw2 && faq.length && fromFaq.includes(kw2.toLowerCase())) { /* owner's own wording */ } else
       if (kw2) return { reply, escalate: true, reason: `draf menyebut "${kw2}"` };
       return { reply: clip(reply, this.cfg.maxReplyChars), escalate: false, reason: "" };
     } catch {
@@ -344,7 +370,7 @@ export class PersonaDesk {
 
   /** Owner persona-editing commands. Returns null if the text is not one of them. */
   async onOwnerCommand(text: string): Promise<{ text: string; buttons?: Button[][] } | null> {
-    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona|setqr|setpricelist|bayarbca|bayarqris)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
+    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona|setqr|setpricelist|bayarbca|bayarqris|tambahinfo|info|hapusinfo)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
     if (!m) return null;
     const cmd = m[1].toLowerCase(), arg = m[2].trim();
     const st = await this.owner();
@@ -363,6 +389,21 @@ export class PersonaDesk {
     }
     switch (cmd) {
       case "persona": return { text: this.describe(st) };
+      case "tambahinfo": {
+        const i = arg.indexOf("|");
+        const q = i < 0 ? "" : arg.slice(0, i).trim(), a = i < 0 ? "" : arg.slice(i + 1).trim();
+        if (!q || !a) return { text: "Format: /tambahinfo <pertanyaan> | <jawaban>\nContoh: /tambahinfo grup vvip kebanned | tenang bro, nanti admin kirim link grup baru 🙏" };
+        const id = ++st.seq; (o.faq ??= []).push({ id, q: q.slice(0, 300), a: a.slice(0, 800) });
+        return save(`✅ Info #${id} ditambahkan (${o.faq.length} total). Lihat /info`);
+      }
+      case "info":
+        return { text: o.faq?.length ? "📚 Info / FAQ:\n\n" + o.faq.map(f => `#${f.id} ❓ ${f.q}\n💬 ${f.a}`).join("\n\n") + "\n\nHapus: /hapusinfo <nomor>" : "Belum ada info. Tambah: /tambahinfo <pertanyaan> | <jawaban>" };
+      case "hapusinfo": {
+        const id = Number(arg.replace(/^#/, ""));
+        const before = o.faq?.length ?? 0;
+        o.faq = (o.faq ?? []).filter(f => f.id !== id);
+        return before === o.faq.length ? { text: `Info #${arg || "?"} tidak ditemukan. Lihat /info` } : save(`🗑️ Info #${id} dihapus.`);
+      }
       case "bayarbca": o.payMode = "bca"; return save("🏦 Mode bayar: BCA. Pelanggan siap bayar dapat draf info transfer BCA (bukan QR). Balik ke QR: /bayarqris");
       case "bayarqris": o.payMode = "qris"; return save(`📷 Mode bayar: QRIS. ${o.qrFileId ? "QR dikirim saat pelanggan siap bayar." : "QR belum ada, kirim foto dengan caption /setqr."}`);
       case "setpricelist": return { text: "Kirim foto pricelist edit dengan caption /setpricelist, atau balas (reply) fotonya dengan /setpricelist." };
@@ -411,6 +452,7 @@ export class PersonaDesk {
       `\nInfo lain:\n${show(o.info)}`,
       `\nSalam pembuka (18+):\n${eff.ageGateText}`,
       `\nContoh chat: ${o.contoh?.length ?? 0} (lihat /contohku)`,
+      `Info/FAQ: ${o.faq?.length ?? 0} (lihat /info)`,
       `QR pembayaran: ${o.qrFileId ? "✅ tersimpan" : "❌ belum (kirim foto dengan caption /setqr)"}`,
       `Mode bayar: ${o.payMode === "bca" ? "🏦 BCA (transfer)" : "📷 QRIS"} (ganti: /bayarbca, /bayarqris)`,
       `Pricelist edit: ${o.editPricelistFileId ? "✅ tersimpan" : "❌ belum (kirim foto dengan caption /setpricelist)"}`,
@@ -423,7 +465,7 @@ export class PersonaDesk {
   async onOwnerAction(data: string): Promise<string> {
     const st = await this.owner();
     if (data === "pa:on") { (st.persona ??= {}).autoSend = true; await this.store.put(st); return "⚠️ Auto-balas ON. Matikan kapan saja dengan /autobalas off"; }
-    if (data === "pa:reset") { st.persona = { qrFileId: st.persona?.qrFileId, editPricelistFileId: st.persona?.editPricelistFileId, payMode: st.persona?.payMode }; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
+    if (data === "pa:reset") { st.persona = { qrFileId: st.persona?.qrFileId, editPricelistFileId: st.persona?.editPricelistFileId, payMode: st.persona?.payMode, faq: st.persona?.faq }; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
     if (data === "pa:cancel") return "Dibatalkan, tidak ada yang berubah.";
     const m = data.match(/^p:(approve|edit|reject):(\d+)$/);
     if (!m) return "Aksi tidak dikenal.";

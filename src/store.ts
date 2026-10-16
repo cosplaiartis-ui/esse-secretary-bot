@@ -12,6 +12,7 @@ export interface PersonaOverrides {
   gaya?: string; layanan?: string; vip?: string; info?: string; salam?: string;
   contoh?: { id: number; text: string }[];
   autoSend?: boolean;
+  faq?: { id: number; q: string; a: string }[];   // owner knowledge base
   qrFileId?: string;   // Telegram file_id of the payment QR photo
   editPricelistFileId?: string;
   payMode?: "qris" | "bca";   // ready-to-pay reply: QR photo (default) or bank transfer text   // Telegram file_id of the edit-service pricelist image

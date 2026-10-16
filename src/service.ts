@@ -59,6 +59,8 @@ Tekan ✅ Kirim / ✏️ Edit / ❌ Tolak, atau:
 /setlayanan <teks>  /setvip <teks>  /setinfo <teks>
 /salam <teks>  salam pembuka (kalimat 18+ selalu ada)
 /contoh <chat>  /contohku  /hapuscontoh <no>
+/tambahinfo <pertanyaan> | <jawaban>  ajari bot jawabanmu (FAQ)
+/info  daftar FAQ   /hapusinfo <no>  hapus
 /setqr  kirim foto QR dengan caption /setqr untuk mengganti QR pembayaran
 /bayarbca  mode bayar transfer BCA   /bayarqris  kembali ke QRIS
 /setpricelist  kirim foto pricelist edit dengan caption /setpricelist
