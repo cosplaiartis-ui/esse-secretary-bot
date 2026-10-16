@@ -17,6 +17,7 @@ export interface PersonaOverrides {
   faq?: { id: number; q: string; a: string }[];   // owner knowledge base
   qrFileId?: string;   // Telegram file_id of the payment QR photo
   editPricelistFileId?: string;
+  migrasiFileId?: string;   // Telegram file_id of the group migration image
   payMode?: "qris" | "bca";   // ready-to-pay reply: QR photo (default) or bank transfer text   // Telegram file_id of the edit-service pricelist image
 }
 
@@ -34,7 +35,8 @@ export interface Pending {
   photoFileId?: string;   // photo sent after the draft text (payment QR)
   photoCaption?: string;
   photoOnly?: boolean;
-  noFollowup?: boolean;   // send as-is, never schedule the pricelist follow-up    // send only the photo (caption carries the text)
+  noFollowup?: boolean;
+  textAfter?: boolean;    // photo has no caption; send draft text after the photo (caption too long)   // send as-is, never schedule the pricelist follow-up    // send only the photo (caption carries the text)
   reason?: string;
   created: number;
 }

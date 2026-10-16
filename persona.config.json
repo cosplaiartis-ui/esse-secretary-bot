@@ -123,5 +123,9 @@
   "editPattern": "\\b(edit(an)?|foto ?ke ?video|video ?ke ?video|img ?2 ?vid|deep ?fake|face ?swap|ganti muka|tukar muka)\\b",
   "editCustomPattern": "\\b(custom|kustom|khusus|request khusus|nego|diskon|durasi panjang|full ?movie|bulk|banyak|borongan)\\b",
   "editPricelistCaption": "ini pricelist edit nya bro, kirim materi & brief kalau mau order ya 🙏",
-  "bcaText": "siap bos 🙏 transfer ke BCA 6042976624 a.n. MF ya, no rek juga ada di link https://esse-kuning-website.vercel.app/ . kirim bukti transfer kalau udah"
+  "bcaText": "siap bos 🙏 transfer ke BCA 6042976624 a.n. MF ya, no rek juga ada di link https://esse-kuning-website.vercel.app/ . kirim bukti transfer kalau udah",
+  "migrasiPattern": "(ke ?banned?|kena ban(ned)?|\\bbanned\\b|grup.{0,20}(hilang|ilang|ga bisa dibuka|gak bisa dibuka|nggak bisa dibuka|ngga bisa dibuka|tidak bisa dibuka|ga bisa masuk|gak bisa masuk|keban|di ?ban|kena ban)|pindah grup|grup baru|group baru|migrasi)",
+  "migrasiCaption": "📢 MIGRASI GRUP BARU\n\nGrup sebelumnya terkena banned, dan saat ini proses pemindahan serta penyusunan ulang konten ke grup baru masih berlangsung.\n\nMigrasi ini khusus untuk member Edisi 2026 (±1.180 member).\n\nBiaya migrasi & maintenance: Rp10.000/member.\n\nSetelah melakukan pembayaran, semua member wajib mengirim bukti pembayaran ke: t.me/punchpop33\n\nSupport lebih dari Rp10.000 juga sangat dipersilakan dan sangat membantu proses migrasi.\n\nTerima kasih atas dukungannya.\nSalam, Esse Kuning 💛",
+  "migrasiBcaLine": "Hari ini pembayaran via BCA 6042976624 a.n. MF ya 🙏",
+  "joinPattern": "\\b(join|gabung|masuk grup|masuk group|grup premium|group premium|premium|berbayar|grup v?vip|group v?vip|v?vip)\\b"
 }

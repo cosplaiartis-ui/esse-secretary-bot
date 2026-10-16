@@ -55,7 +55,7 @@ describe("FAQ drafting", () => {
     await desk.onIncoming(msg("Saya sudah member sebelumnya"));
     expect(owner(sent)).toContain("Perlu kamu jawab");
     expect(prompts).toHaveLength(0);
-    await desk.onIncoming(msg("Grup vvip ne kebanned"));
+    await desk.onIncoming(msg("kontennya update tiap hari?"));
     expect(prompts[0]).not.toContain("Owner FAQ");
   });
   it("diskon/nego, explicit and minors stay escalated or blocked even with FAQ", async () => {

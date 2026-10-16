@@ -51,6 +51,7 @@ export function createBot(token: string, store: Store, llm: LLM | null = llmFrom
       if (uid === ownerId) {
         const rp = ctx.message.reply_to_message?.photo;
         if (/^\/setqr\b/i.test(ctx.message.text) && rp?.length) { await ctx.reply(await persona.setQr(rp[rp.length - 1].file_id)); return; }
+        if (/^\/setmigrasi\b/i.test(ctx.message.text) && rp?.length) { await ctx.reply(await persona.setMigrasi(rp[rp.length - 1].file_id)); return; }
         if (/^\/setpricelist\b/i.test(ctx.message.text) && rp?.length) { await ctx.reply(await persona.setEditPricelist(rp[rp.length - 1].file_id)); return; }
         const rt = ctx.message.reply_to_message;
         const mr = ctx.message.text.match(/^\/member(?:@\w+)?(?:\s+(\d+))?\s*$/i);
@@ -77,7 +78,8 @@ export function createBot(token: string, store: Store, llm: LLM | null = llmFrom
     if (uid === ownerId) {
       await ctx.reply(/^\/setqr\b/i.test(cap) ? await persona.setQr(fileId)
         : /^\/setpricelist\b/i.test(cap) ? await persona.setEditPricelist(fileId)
-        : "Foto diterima. Caption /setqr untuk QR pembayaran, atau /setpricelist untuk pricelist edit.");
+        : /^\/setmigrasi\b/i.test(cap) ? await persona.setMigrasi(fileId)
+        : "Foto diterima. Caption /setqr untuk QR pembayaran, /setpricelist untuk pricelist edit, /setmigrasi untuk gambar migrasi grup.");
       return;
     }
     if (allowed.includes(uid) || !ownerId) return;

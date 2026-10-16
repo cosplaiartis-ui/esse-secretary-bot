@@ -33,6 +33,10 @@ export interface PersonaConfig {
   qrReplyText?: string;         // text before the QR photo, e.g. "siap bos"
   qrCaption?: string;
   bcaText?: string;             // ready-to-pay reply when payment mode is BCA
+  joinPattern?: string;         // regex: asks about joining the VIP/premium group -> pricelist link
+  migrasiPattern?: string;      // regex: group banned / moved -> migration image
+  migrasiCaption?: string;
+  migrasiBcaLine?: string;      // appended when payment mode is BCA
   editPattern?: string;         // regex: member asks to order / price an edit service
   editCustomPattern?: string;   // regex: custom/complex edit request -> escalate
   editPricelistCaption?: string;
@@ -277,6 +281,26 @@ export class PersonaDesk {
       return;
     }
 
+    // Group banned / migration: draft the migration image + owner's caption (before FAQ and member/vip escalation).
+    const migImg = st.persona?.migrasiFileId;
+    if (migImg && this.out.toContactPhoto && this.matches(this.cfg.migrasiPattern, msg.text)) {
+      let caption = this.cfg.migrasiCaption || "";
+      if (st.persona?.payMode === "bca") caption += `\n\n${this.cfg.migrasiBcaLine || "Hari ini pembayaran via BCA 6042976624 a.n. MF ya 🙏"}`;
+      const textAfter = this.withDisclosure(caption).length > 1024;
+      if (!this.cfg.approvalMode && this.cfg.autoSend) {
+        if (textAfter) { await this.out.toContactPhoto(target, migImg, ""); await this.out.toContact(target, this.withDisclosure(caption)); }
+        else await this.out.toContactPhoto(target, migImg, this.withDisclosure(caption));
+        await this.out.toOwner(`🤖 Info migrasi grup terkirim otomatis ke ${msg.contactName}.\n${head}`);
+        return;
+      }
+      const id = ++st.seq;
+      st.pending.push({ id, kind: "approval", contactName: msg.contactName, contactChatId: msg.chatId, businessConnectionId: msg.businessConnectionId,
+        incoming: msg.text, draft: caption, photoFileId: migImg, photoCaption: textAfter ? "" : caption, photoOnly: !textAfter, textAfter, created: this.now() });
+      await this.store.put(st);
+      await this.out.toOwner(`📢 Info migrasi grup #${id}\n${head}\n\nDraf: 📷 gambar migrasi + teks:\n"${clip(caption, 1500)}"`,
+        [[{ text: "✅ Kirim", data: `p:approve:${id}` }, { text: "✏️ Edit", data: `p:edit:${id}` }, { text: "❌ Tolak", data: `p:reject:${id}` }]]);
+      return;
+    }
     // Edit-service order or price: draft the edit pricelist image (prices live only in the image).
     const editImg = st.persona?.editPricelistFileId;
     const editAsk = this.isEditRequest(msg.text);
@@ -297,7 +321,9 @@ export class PersonaDesk {
     }
     const editCustom = this.isEditCustom(msg.text);
     const nonMemberEdit = editAsk && member === false;
-    const payIntent = !editCustom && !nonMemberEdit && this.isPayIntent(msg.text);
+    // Join / premium / VIP group questions (no payment, discount or other hard topic): VIP pricelist link.
+    const joinAsk = !editAsk && !editCustom && !this.faqMatches(msg.text).length && this.matches(this.cfg.joinPattern, msg.text) && !this.hardKeywordHit(msg.text);
+    const payIntent = !editCustom && !nonMemberEdit && !joinAsk && this.isPayIntent(msg.text);
     if (payIntent && st.persona?.payMode === "bca") {
       const reply = this.cfg.bcaText || "siap bos 🙏 transfer ke BCA 6042976624 a.n. MF ya, no rek juga ada di link https://esse-kuning-website.vercel.app/ . kirim bukti transfer kalau udah";
       if (!this.cfg.approvalMode && this.cfg.autoSend) {
@@ -333,7 +359,7 @@ export class PersonaDesk {
     }
     const d = editCustom
       ? { reply: "", escalate: true, reason: "permintaan edit custom/kompleks" }
-      : (nonMemberEdit && this.cfg.pricelistUrl) || this.isPriceQuestion(msg.text)
+      : ((nonMemberEdit || joinAsk) && this.cfg.pricelistUrl) || this.isPriceQuestion(msg.text)
       ? { reply: (this.cfg.pricelistText || "cek pricelist di sini ya bro 👉 {url}").replace("{url}", this.cfg.pricelistUrl!), escalate: false, reason: "" }
       : await this.draft(msg);
     if (payIntent && !d.escalate) { d.escalate = true; d.reason = "pelanggan siap bayar"; }
@@ -421,6 +447,14 @@ export class PersonaDesk {
     return "✅ QR pembayaran disimpan. Dipakai saat pelanggan siap bayar.";
   }
 
+  /** Owner sets the group migration image (file_id of a photo). */
+  async setMigrasi(fileId: string): Promise<string> {
+    const st = await this.owner();
+    (st.persona ??= {}).migrasiFileId = fileId;
+    await this.store.put(st);
+    return "✅ Gambar migrasi grup disimpan. Dikirim (sebagai draf) saat ada yang tanya grup kebanned/pindah grup.";
+  }
+
   /** Owner sets the edit-service pricelist image (file_id of a photo). */
   async setEditPricelist(fileId: string): Promise<string> {
     const st = await this.owner();
@@ -431,7 +465,7 @@ export class PersonaDesk {
 
   /** Owner persona-editing commands. Returns null if the text is not one of them. */
   async onOwnerCommand(text: string): Promise<{ text: string; buttons?: Button[][] } | null> {
-    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona|setqr|setpricelist|bayarbca|bayarqris|tambahinfo|info|hapusinfo|member|hapusmember|daftarmember|grupvip|hapusgrupvip)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
+    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona|setqr|setpricelist|bayarbca|bayarqris|tambahinfo|info|hapusinfo|member|hapusmember|daftarmember|grupvip|hapusgrupvip|setmigrasi)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
     if (!m) return null;
     const cmd = m[1].toLowerCase(), arg = m[2].trim();
     const st = await this.owner();
@@ -492,6 +526,7 @@ export class PersonaDesk {
       }
       case "bayarbca": o.payMode = "bca"; return save("🏦 Mode bayar: BCA. Pelanggan siap bayar dapat draf info transfer BCA (bukan QR). Balik ke QR: /bayarqris");
       case "bayarqris": o.payMode = "qris"; return save(`📷 Mode bayar: QRIS. ${o.qrFileId ? "QR dikirim saat pelanggan siap bayar." : "QR belum ada, kirim foto dengan caption /setqr."}`);
+      case "setmigrasi": return { text: "Kirim foto migrasi dengan caption /setmigrasi, atau balas (reply) fotonya dengan /setmigrasi." };
       case "setpricelist": return { text: "Kirim foto pricelist edit dengan caption /setpricelist, atau balas (reply) fotonya dengan /setpricelist." };
       case "setqr": return { text: "Kirim foto QR dengan caption /setqr, atau balas (reply) foto QR dengan /setqr." };
       case "contoh": {
@@ -542,6 +577,7 @@ export class PersonaDesk {
       `Member manual: ${o.members?.length ?? 0} (/daftarmember) · Grup VIP: ${o.vipGroups?.length ?? 0} (/grupvip)`,
       `QR pembayaran: ${o.qrFileId ? "✅ tersimpan" : "❌ belum (kirim foto dengan caption /setqr)"}`,
       `Mode bayar: ${o.payMode === "bca" ? "🏦 BCA (transfer)" : "📷 QRIS"} (ganti: /bayarbca, /bayarqris)`,
+      `Gambar migrasi grup: ${o.migrasiFileId ? "✅ tersimpan" : "❌ belum (kirim foto dengan caption /setmigrasi)"}`,
       `Pricelist edit: ${o.editPricelistFileId ? "✅ tersimpan" : "❌ belum (kirim foto dengan caption /setpricelist)"}`,
       `Pricelist: ${eff.pricelistUrl ?? "-"} | follow-up ${eff.followUpMinutes ?? 0} menit`,
       `\n🔒 Aturan tetap (tidak bisa diubah): tanpa konten eksplisit, blokir di bawah umur, eskalasi harga/bayar/VIP/custom/janji, tidak menyebut Fajrin.`,
@@ -552,7 +588,7 @@ export class PersonaDesk {
   async onOwnerAction(data: string): Promise<string> {
     const st = await this.owner();
     if (data === "pa:on") { (st.persona ??= {}).autoSend = true; await this.store.put(st); return "⚠️ Auto-balas ON. Matikan kapan saja dengan /autobalas off"; }
-    if (data === "pa:reset") { st.persona = { qrFileId: st.persona?.qrFileId, editPricelistFileId: st.persona?.editPricelistFileId, payMode: st.persona?.payMode, faq: st.persona?.faq, members: st.persona?.members, vipGroups: st.persona?.vipGroups }; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
+    if (data === "pa:reset") { st.persona = { qrFileId: st.persona?.qrFileId, editPricelistFileId: st.persona?.editPricelistFileId, migrasiFileId: st.persona?.migrasiFileId, payMode: st.persona?.payMode, faq: st.persona?.faq, members: st.persona?.members, vipGroups: st.persona?.vipGroups }; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
     if (data === "pa:cancel") return "Dibatalkan, tidak ada yang berubah.";
     const mm = data.match(/^m:add:(-?\d+)$/);
     if (mm) return this.addMember(Number(mm[1]));
@@ -564,8 +600,13 @@ export class PersonaDesk {
       if (!p.draft) return "Tidak ada draf. Pakai ✍️ Balas.";
       this.cur = this.effective(st.persona);
       if (p.photoFileId && this.out.toContactPhoto) {
-        if (!p.photoOnly) await this.out.toContact(this.target(p), p.draft);
-        await this.out.toContactPhoto(this.target(p), p.photoFileId, this.withDisclosure(p.photoCaption || ""));
+        if (p.textAfter) {
+          await this.out.toContactPhoto(this.target(p), p.photoFileId, "");
+          await this.out.toContact(this.target(p), this.withDisclosure(p.draft));
+        } else {
+          if (!p.photoOnly) await this.out.toContact(this.target(p), p.draft);
+          await this.out.toContactPhoto(this.target(p), p.photoFileId, this.withDisclosure(p.photoCaption || ""));
+        }
       } else if (p.noFollowup) await this.out.toContact(this.target(p), this.withDisclosure(p.draft));
       else await this.sendContact(st, this.target(p), p.contactName, this.withDisclosure(p.draft));
       this.drop(st, p.id); await this.store.put(st);

@@ -93,7 +93,7 @@ describe("PersonaDesk", () => {
   });
 
   it("VIP, payment, custom and explicit requests escalate without the LLM", async () => {
-    for (const t of ["mau join VIP dong", "transfer kemana kak?", "bisa custom video?", "kirim nudes dong"]) {
+    for (const t of ["transfer kemana kak?", "bisa custom video?", "kirim nudes dong"]) {
       const { desk, sent } = setup(new Error("not called"), { ...loadPersona(process.cwd()).config, ageGate: false });
       await desk.onIncoming(msg(t));
       expect(sent.find(s => s.to === "owner")!.text, t).toContain("Perlu kamu jawab");

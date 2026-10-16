@@ -68,6 +68,7 @@ Daftar grup VIP: jadikan bot admin di grup, lalu kirim /setgrupvip di grup itu.
 /info  daftar FAQ   /hapusinfo <no>  hapus
 /setqr  kirim foto QR dengan caption /setqr untuk mengganti QR pembayaran
 /bayarbca  mode bayar transfer BCA   /bayarqris  kembali ke QRIS
+/setmigrasi  kirim foto info migrasi grup dengan caption /setmigrasi
 /setpricelist  kirim foto pricelist edit dengan caption /setpricelist
 /autobalas on|off  default off (semua balasan menunggu persetujuanmu)
 /resetpersona  kembali ke default
