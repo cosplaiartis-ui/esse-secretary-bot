@@ -6,35 +6,56 @@ import { parseAmount, rupiah } from "./money.js";
 
 export const DEFAULT_TZ = "Asia/Makassar";
 
-export const HELP = `Halo! Saya sekretaris pribadimu. Perintah:
+export const HELP = `📋 Daftar perintah
 
-Pengingat
-/ingat <kapan> <apa>  contoh: /ingat besok jam 9 rapat
-   juga: "30 menit lagi angkat jemuran", "setiap senin jam 8 laporan", "tiap hari jam 7 minum obat"
+⏰ Pengingat
+/ingat <kapan> <apa>
+   contoh: /ingat besok jam 9 rapat
+   /ingat 30 menit lagi angkat jemuran
+   /ingat tiap senin jam 8 laporan
 /pengingat  daftar pengingat
 /hapusingat <no>
 
-Jadwal
-/jadwal <kapan> <acara>  contoh: /jadwal jumat jam 14:00 meeting klien
-/hariini  /mingguini  /hapusjadwal <no>
+📅 Jadwal
+/jadwal <kapan> <acara>
+   contoh: /jadwal jumat jam 14:00 meeting klien
+/hariini  jadwal hari ini
+/mingguini  7 hari ke depan
+/hapusjadwal <no>
 
-Catatan
-/catat <isi>  /catatan  /cari <kata>  /hapuscatat <no>
+📝 Catatan
+/catat <isi>  contoh: /catat wifi kantor di laci
+/catatan  daftar catatan
+/cari <kata>  contoh: /cari wifi
+/hapuscatat <no>
 
-Tugas harian
-/tugas <isi>  /tugasku  /selesai <no>  /hapustugas <no>
+✅ Tugas harian
+/tugas <isi>  contoh: /tugas kirim invoice
+/tugasku  daftar tugas
+/selesai <no>
+/hapustugas <no>
 
-Pendapatan (khusus pemilik)
+💰 Pendapatan
 /masuk <jumlah> [keterangan]  contoh: /masuk 50rb VIP, /masuk 1,5jt endorse
-/keluar <jumlah> [keterangan]  /pendapatan  /hapusmasuk <no>
-Laporan pendapatan kemarin dikirim otomatis tiap jam 00:00.
+/keluar <jumlah> [keterangan]  contoh: /keluar 20rb kuota
+/pendapatan  total & rincian hari ini
+/hapusmasuk <no>
+   Laporan kemarin dikirim otomatis jam 00:00.
 
-Pengaturan
-/zona <Area/Kota>  contoh: /zona Asia/Jakarta
+☀️ Ringkasan & pengaturan
+/ringkas  ringkasan hari ini
 /ringkasan <jam>  jam ringkasan pagi (default 7), /ringkasan off
-/ringkas  tampilkan ringkasan sekarang
+/zona <Area/Kota>  contoh: /zona Asia/Jakarta
 
-Tip: kirim teks biasa yang diawali "ingatkan ..." juga bisa.`;
+💬 Balasan bisnis
+Pesan dari orang lain masuk ke sini sebagai draf atau eskalasi.
+Tekan ✅ Kirim / ✏️ Edit / ❌ Tolak, atau:
+/balas <no> <teks>  contoh: /balas 12 Halo kak, sudah aktif ya
+/batal  batalkan balasan yang sedang diketik
+
+❓ /help  tampilkan daftar ini
+
+Tip: bisa juga pakai bahasa biasa, misal "ingetin besok jam 10 telpon klien" atau "dapet 50rb dari VIP".`;
 
 export class Secretary {
   /** ownerId: only this user may use income commands (undefined = any allowed user, used in tests/console). */
@@ -61,6 +82,8 @@ export class Secretary {
 
     switch (cmd) {
       case "start": case "help": case "bantuan": return HELP;
+      case "batal": return "Tidak ada balasan yang sedang diketik.";
+      case "balas": return "Contoh: /balas 12 Halo kak. Nomor ada di pesan draf/eskalasi.";
       case "ingat": case "remind": return this.addReminder(st, arg);
       case "pengingat": case "reminders": return this.listReminders(st);
       case "hapusingat": return this.remove(st, "reminders", arg, "Pengingat");

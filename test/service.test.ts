@@ -71,3 +71,18 @@ describe("Secretary", () => {
     expect(await sec.handle(1, 1, "/ingat rapat")).toContain("belum jelas");
   });
 });
+
+import { OWNER_COMMANDS } from "../src/commands.js";
+describe("command menu", () => {
+  it("valid for Telegram and documented in /help", async () => {
+    const sec = new Secretary(new MemoryStore());
+    const help = await sec.handle(1, 1, "/help");
+    expect(await sec.handle(1, 1, "/start")).toBe(help);
+    expect(OWNER_COMMANDS.length).toBeLessThanOrEqual(100);
+    for (const c of OWNER_COMMANDS) {
+      expect(c.command).toMatch(/^[a-z0-9_]{1,32}$/);
+      expect(c.description.length).toBeLessThanOrEqual(256);
+      expect(help).toContain(`/${c.command}`);
+    }
+  });
+});
