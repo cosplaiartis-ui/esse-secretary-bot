@@ -1,4 +1,5 @@
 # Free scheduler: GitHub Actions cron (min interval 5 min, may run a few minutes late).
+# Requires repo secrets CRON_SECRET and TICK_URL; skips quietly until they are set.
 name: reminder-tick
 on:
   schedule:
@@ -9,5 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - run: |
-          curl -fsS -X POST -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ secrets.TICK_URL }}"
+      - env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TICK_URL: ${{ secrets.TICK_URL }}
+        run: |
+          if [ -z "$TICK_URL" ] || [ -z "$CRON_SECRET" ]; then echo "TICK_URL/CRON_SECRET not set, skipping"; exit 0; fi
+          curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" "$TICK_URL"

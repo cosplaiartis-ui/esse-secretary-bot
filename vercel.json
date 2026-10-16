@@ -1,1 +1,1 @@
-{ "functions": { "api/*.ts": { "maxDuration": 10 } } }
+{ "functions": { "api/*.ts": { "maxDuration": 10, "includeFiles": "{persona.md,persona.config.json}" } } }
