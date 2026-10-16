@@ -53,6 +53,16 @@ Tekan ✅ Kirim / ✏️ Edit / ❌ Tolak, atau:
 /balas <no> <teks>  contoh: /balas 12 Halo kak, sudah aktif ya
 /batal  batalkan balasan yang sedang diketik
 
+🎭 Persona Esse Kuning
+/persona  lihat pengaturan sekarang
+/setgaya <teks>  contoh: /setgaya santai, panggil "kak", emoji secukupnya
+/setlayanan <teks>  /setvip <teks>  /setinfo <teks>
+/salam <teks>  salam pembuka (kalimat 18+ selalu ada)
+/contoh <chat>  /contohku  /hapuscontoh <no>
+/autobalas on|off  default off (semua balasan menunggu persetujuanmu)
+/resetpersona  kembali ke default
+   Aturan keamanan (konten eksplisit, di bawah umur, harga/bayar/VIP) tidak bisa diubah.
+
 ❓ /help  tampilkan daftar ini
 
 Tip: bisa juga pakai bahasa biasa, misal "ingetin besok jam 10 telpon klien" atau "dapet 50rb dari VIP".`;
