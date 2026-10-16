@@ -8,6 +8,12 @@ export interface Task { id: number; text: string; day: string; done: boolean; cr
 
 export interface Money { id: number; amount: number; note: string; at: number; kind: "in" | "out"; }
 
+export interface PersonaOverrides {
+  gaya?: string; layanan?: string; vip?: string; info?: string; salam?: string;
+  contoh?: { id: number; text: string }[];
+  autoSend?: boolean;
+}
+
 export interface Pending {
   id: number;
   kind: "approval" | "escalation";
@@ -34,6 +40,7 @@ export interface UserState {
   pending?: Pending[];        // persona drafts/escalations awaiting the owner
   awaitingReplyFor?: number;
   seenContacts?: number[];
+  persona?: PersonaOverrides;  // owner-edited persona (overrides persona.md/config soft fields)
   money?: Money[];            // owner-only income/expense log
   lastMoneyReportDay?: string; // YYYY-MM-DD (local) of the last day whose report was sent    // chat ids that already got the age gate  // pending id whose reply the owner is typing
 }

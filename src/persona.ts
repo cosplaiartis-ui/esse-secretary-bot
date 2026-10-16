@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { LLM } from "./llm.js";
-import type { Store, UserState, Pending } from "./store.js";
+import type { Store, UserState, Pending, PersonaOverrides } from "./store.js";
 import { newUser } from "./store.js";
 import { DEFAULT_TZ } from "./service.js";
 
@@ -56,7 +56,26 @@ export class PersonaDesk {
     private persona: { config: PersonaConfig; text: string }, private now: () => number = Date.now,
   ) {}
 
-  private get cfg() { return this.persona.config; }
+  private cur?: { config: PersonaConfig; text: string };
+  private get cfg() { return this.cur?.config ?? this.persona.config; }
+  private get text() { return this.cur?.text ?? this.persona.text; }
+
+  /** Merge owner overrides (soft fields only). Hard rules (blockPatterns, escalationKeywords, refusal, brand) stay fixed. */
+  effective(o?: PersonaOverrides): { config: PersonaConfig; text: string } {
+    const base = this.persona;
+    if (!o) return base;
+    const config = { ...base.config };
+    if (o.autoSend !== undefined) { config.autoSend = o.autoSend; config.approvalMode = !o.autoSend; }
+    if (o.salam) config.ageGateText = /18/.test(o.salam) ? o.salam : `${o.salam}\n\nLayanan ini khusus 18+ (dewasa).`;
+    const parts: string[] = [];
+    if (o.gaya) parts.push(`## Tone and style (owner override)\n${o.gaya}`);
+    if (o.layanan) parts.push(`## Offerings (owner override, non-binding, no prices)\n${o.layanan}`);
+    if (o.vip) parts.push(`## VIP info (context only; prices, payments, access always escalated)\n${o.vip}`);
+    if (o.info) parts.push(`## Other business info (owner override)\n${o.info}`);
+    if (o.contoh?.length) parts.push(`## Chat-style examples (owner)\n${o.contoh.map(c => c.text).join("\n---\n")}`);
+    const text = parts.length ? `${base.text}\n\n# Owner overrides (take precedence over TODO placeholders above; hard rules still apply)\n\n${parts.join("\n\n")}` : base.text;
+    return { config, text };
+  }
   private withDisclosure(t: string) { return this.cfg.discloseAI ? `${t}\n\n${this.cfg.disclosureText}` : t; }
 
   private async owner(): Promise<UserState> {
@@ -81,7 +100,7 @@ export class PersonaDesk {
         json: true,
         messages: [
           { role: "system", content:
-            `You draft Telegram support replies as the ${this.cfg.brand} admin, following this persona:\n\n${this.persona.text}\n\n` +
+            `You draft Telegram support replies as the ${this.cfg.brand} admin, following this persona:\n\n${this.text}\n\n` +
             `Rules: never write sexual or explicit content; never state prices, payments, VIP access, subscriptions, ` +
             `custom requests, deadlines, promises or commitments; never mention any other brand or the owner's identity; ` +
             `if unsure or the message touches any of those, or age/consent, set escalate=true with reply "". ` +
@@ -101,8 +120,9 @@ export class PersonaDesk {
   }
 
   async onIncoming(msg: Incoming): Promise<void> {
-    if (!this.cfg.enabled) return;
     const st = await this.owner();
+    this.cur = this.effective(st.persona);
+    if (!this.cfg.enabled) return;
     st.pending ??= [];
     const head = `👤 ${msg.contactName}${msg.businessConnectionId ? " (akun pribadimu)" : ""}:\n"${clip(msg.text, 800)}"`;
     const target0: Target = { chatId: msg.chatId, businessConnectionId: msg.businessConnectionId };
@@ -150,11 +170,83 @@ export class PersonaDesk {
       [[{ text: "✅ Kirim", data: `p:approve:${id}` }, { text: "✏️ Edit", data: `p:edit:${id}` }, { text: "❌ Tolak", data: `p:reject:${id}` }]]);
   }
 
+  /** Owner persona-editing commands. Returns null if the text is not one of them. */
+  async onOwnerCommand(text: string): Promise<{ text: string; buttons?: Button[][] } | null> {
+    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
+    if (!m) return null;
+    const cmd = m[1].toLowerCase(), arg = m[2].trim();
+    const st = await this.owner();
+    const o: PersonaOverrides = (st.persona ??= {});
+    const save = async (t: string) => { await this.store.put(st); return { text: t }; };
+    const fields: Record<string, keyof PersonaOverrides> = { setgaya: "gaya", setlayanan: "layanan", setvip: "vip", setinfo: "info", salam: "salam" };
+    if (fields[cmd]) {
+      const f = fields[cmd];
+      if (!arg) return { text: `Isi teksnya. Contoh: /${cmd} ${cmd === "salam" ? "Halo kak, selamat datang di Esse Kuning!" : "..."}\nSekarang: ${(o[f] as string) || "(default)"}` };
+      if (/fajrin/i.test(arg)) return { text: "❌ Persona Esse Kuning tidak boleh menyebut Fajrin. Teks tidak disimpan." };
+      if (arg.length > 1500) return { text: "❌ Terlalu panjang (maks 1500 karakter)." };
+      (o as Record<string, unknown>)[f] = arg;
+      const note = cmd === "setvip" ? "\nCatatan: harga, pembayaran & akses VIP tetap selalu dieskalasi ke kamu."
+        : cmd === "salam" && !/18/.test(arg) ? "\nCatatan: kalimat 18+ otomatis ditambahkan." : "";
+      return save(`✅ ${cmd === "salam" ? "Salam pembuka" : f} disimpan.${note}`);
+    }
+    switch (cmd) {
+      case "persona": return { text: this.describe(st) };
+      case "contoh": {
+        if (!arg) return { text: "Contoh: /contoh Them: kak ada promo?\nAdmin: halo kak, cek pin channel ya 🙏" };
+        if (/fajrin/i.test(arg)) return { text: "❌ Contoh tidak boleh menyebut Fajrin." };
+        const id = ++st.seq; (o.contoh ??= []).push({ id, text: arg.slice(0, 800) });
+        return save(`✅ Contoh #${id} ditambahkan (${o.contoh.length} total).`);
+      }
+      case "contohku":
+        return { text: o.contoh?.length ? "💬 Contoh gaya chat:\n\n" + o.contoh.map(c => `#${c.id}\n${c.text}`).join("\n\n") : "Belum ada contoh. Tambah dengan /contoh <teks>" };
+      case "hapuscontoh": {
+        const id = parseInt(arg.replace("#", ""));
+        const before = o.contoh?.length ?? 0;
+        o.contoh = (o.contoh ?? []).filter(c => c.id !== id);
+        return before === o.contoh.length ? { text: `Contoh #${arg || "?"} tidak ditemukan.` } : save(`🗑️ Contoh #${id} dihapus.`);
+      }
+      case "autobalas": {
+        if (/^off$/i.test(arg)) { o.autoSend = false; return save("✅ Auto-balas MATI. Semua balasan AI menunggu persetujuanmu (mode aman)."); }
+        if (/^on$/i.test(arg)) return {
+          text: "⚠️ Yakin nyalakan auto-balas?\nBalasan AI akan langsung terkirim ke pelanggan TANPA persetujuanmu. " +
+            "Topik harga, pembayaran, VIP, custom, umur & konten eksplisit tetap dieskalasi, tapi AI bisa saja salah ucap.",
+          buttons: [[{ text: "⚠️ Ya, nyalakan", data: "pa:on" }, { text: "Batal", data: "pa:cancel" }]],
+        };
+        return { text: `Auto-balas: ${this.effective(o).config.autoSend && !this.effective(o).config.approvalMode ? "ON" : "OFF (mode persetujuan)"}. Pakai /autobalas on atau /autobalas off` };
+      }
+      case "resetpersona": return {
+        text: "Reset semua pengaturan persona ke default (gaya, layanan, VIP, info, salam, contoh, auto-balas OFF)?",
+        buttons: [[{ text: "🔄 Ya, reset", data: "pa:reset" }, { text: "Batal", data: "pa:cancel" }]],
+      };
+    }
+    return null;
+  }
+
+  describe(st: UserState): string {
+    const o = st.persona ?? {};
+    const eff = this.effective(o).config;
+    const show = (v?: string) => (v ? v : "(default dari persona.md)");
+    return [
+      `🎭 Persona ${eff.brand}`,
+      `Mode: ${eff.autoSend && !eff.approvalMode ? "⚠️ AUTO-BALAS ON" : "✅ Persetujuan (aman)"}`,
+      `\nGaya:\n${show(o.gaya)}`,
+      `\nLayanan:\n${show(o.layanan)}`,
+      `\nVIP (konteks saja):\n${show(o.vip)}`,
+      `\nInfo lain:\n${show(o.info)}`,
+      `\nSalam pembuka (18+):\n${eff.ageGateText}`,
+      `\nContoh chat: ${o.contoh?.length ?? 0} (lihat /contohku)`,
+      `\n🔒 Aturan tetap (tidak bisa diubah): tanpa konten eksplisit, blokir di bawah umur, eskalasi harga/bayar/VIP/custom/janji, tidak menyebut Fajrin.`,
+    ].join("\n");
+  }
+
   /** Handle owner button presses. Returns text to show the owner. */
   async onOwnerAction(data: string): Promise<string> {
+    const st = await this.owner();
+    if (data === "pa:on") { (st.persona ??= {}).autoSend = true; await this.store.put(st); return "⚠️ Auto-balas ON. Matikan kapan saja dengan /autobalas off"; }
+    if (data === "pa:reset") { st.persona = {}; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
+    if (data === "pa:cancel") return "Dibatalkan, tidak ada yang berubah.";
     const m = data.match(/^p:(approve|edit|reject):(\d+)$/);
     if (!m) return "Aksi tidak dikenal.";
-    const st = await this.owner();
     const p = st.pending?.find(x => x.id === +m[2]);
     if (!p) return "Sudah diproses atau tidak ditemukan.";
     if (m[1] === "approve") {

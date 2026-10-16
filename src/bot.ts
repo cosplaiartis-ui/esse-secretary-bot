@@ -34,6 +34,10 @@ export function createBot(token: string, store: Store, llm: LLM | null = llmFrom
   bot.chatType("private").on("message:text", async ctx => {
     const uid = ctx.from.id;
     if (allowed.includes(uid)) {
+      if (uid === ownerId) {
+        const pc = await persona.onOwnerCommand(ctx.message.text);
+        if (pc) { await ctx.reply(pc.text, { reply_markup: kb(pc.buttons) }); return; }
+      }
       const consumed = uid === ownerId ? await persona.onOwnerText(ctx.message.text) : null;
       await ctx.reply(consumed ?? (await brain.handle(uid, ctx.chat.id, ctx.message.text)));
       return;
