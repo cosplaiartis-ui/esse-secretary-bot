@@ -27,6 +27,10 @@ export function makeOutbox(api: Api, ownerId: number): Outbox {
       await api.sendPhoto(t.chatId, fileId, { caption, ...(t.businessConnectionId ? { business_connection_id: t.businessConnectionId } : {}) });
     },
     toOwnerPhoto: async (fileId, caption, buttons) => { if (ownerId) await api.sendPhoto(ownerId, fileId, { caption, reply_markup: kb(buttons) }); },
+    isGroupMember: async (groupId, userId) => {
+      const m = await api.getChatMember(groupId, userId);
+      return ["member", "administrator", "creator", "restricted"].includes(m.status) && !(m.status === "restricted" && m.is_member === false);
+    },
   };
 }
 
@@ -48,6 +52,9 @@ export function createBot(token: string, store: Store, llm: LLM | null = llmFrom
         const rp = ctx.message.reply_to_message?.photo;
         if (/^\/setqr\b/i.test(ctx.message.text) && rp?.length) { await ctx.reply(await persona.setQr(rp[rp.length - 1].file_id)); return; }
         if (/^\/setpricelist\b/i.test(ctx.message.text) && rp?.length) { await ctx.reply(await persona.setEditPricelist(rp[rp.length - 1].file_id)); return; }
+        const rt = ctx.message.reply_to_message;
+        const mr = ctx.message.text.match(/^\/member(?:@\w+)?(?:\s+(\d+))?\s*$/i);
+        if (mr && rt && (rt.text || rt.caption)) { await ctx.reply(await persona.memberFromCard(rt.text || rt.caption || "", mr[1] ? Number(mr[1]) : undefined)); return; }
         const pc = await persona.onOwnerCommand(ctx.message.text);
         if (pc) { await ctx.reply(pc.text, { reply_markup: kb(pc.buttons) }); return; }
       }
@@ -76,6 +83,27 @@ export function createBot(token: string, store: Store, llm: LLM | null = llmFrom
     if (allowed.includes(uid) || !ownerId) return;
     const name = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") + (ctx.from.username ? ` @${ctx.from.username}` : "");
     await persona.onIncoming({ contactName: `${name} (id ${uid})`, chatId: ctx.chat.id, text: cap, photoFileId: fileId });
+  });
+
+  // VIP groups: owner runs /setgrupvip inside the group (bot must be admin), or promotes the bot to admin.
+  const registerGroup = async (chatId: number, title: string): Promise<string> => {
+    const me = await bot.api.getMe();
+    const cm = await bot.api.getChatMember(chatId, me.id);
+    if (cm.status !== "administrator") return "Jadikan bot admin di grup ini dulu, lalu kirim /setgrupvip lagi.";
+    const r = await persona.addVipGroup(chatId, title);
+    await out.toOwner(r);
+    return "✅ Grup ini terdaftar sebagai grup VIP.";
+  };
+  bot.chatType(["group", "supergroup"]).command("setgrupvip", async ctx => {
+    if (ctx.from?.id !== ownerId) return;
+    await ctx.reply(await registerGroup(ctx.chat.id, ctx.chat.title ?? String(ctx.chat.id)));
+  });
+  bot.on("my_chat_member", async ctx => {
+    const u = ctx.myChatMember, c = u.chat;
+    if (c.type !== "group" && c.type !== "supergroup") return;
+    if (u.from.id !== ownerId || u.new_chat_member.status !== "administrator") return;
+    const t = (c as { title?: string }).title ?? String(c.id);
+    await persona.addVipGroup(c.id, t).then(r => out.toOwner(r));
   });
 
   // Owner quick actions (Approve / Edit / Reject).

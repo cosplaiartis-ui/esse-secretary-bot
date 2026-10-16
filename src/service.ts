@@ -59,6 +59,11 @@ Tekan ✅ Kirim / ✏️ Edit / ❌ Tolak, atau:
 /setlayanan <teks>  /setvip <teks>  /setinfo <teks>
 /salam <teks>  salam pembuka (kalimat 18+ selalu ada)
 /contoh <chat>  /contohku  /hapuscontoh <no>
+⭐ Member
+/member <user_id> [hari]  atau reply kartu draf dengan /member [hari]
+/hapusmember <user_id>   /daftarmember
+/grupvip  daftar grup VIP   /hapusgrupvip <id>
+Daftar grup VIP: jadikan bot admin di grup, lalu kirim /setgrupvip di grup itu.
 /tambahinfo <pertanyaan> | <jawaban>  ajari bot jawabanmu (FAQ)
 /info  daftar FAQ   /hapusinfo <no>  hapus
 /setqr  kirim foto QR dengan caption /setqr untuk mengganti QR pembayaran

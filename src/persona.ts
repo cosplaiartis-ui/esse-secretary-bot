@@ -61,12 +61,19 @@ export interface Outbox {
   toContact(target: Target, text: string): Promise<void>;
   toContactPhoto?(target: Target, fileId: string, caption: string): Promise<void>;
   toOwnerPhoto?(fileId: string, caption: string, buttons?: Button[][]): Promise<void>;
+  /** True if the user is in the group (member/administrator/creator/restricted). */
+  isGroupMember?(groupId: number, userId: number): Promise<boolean>;
 }
 
+const groupCache = new Map<string, { v: boolean; at: number }>();
+const GROUP_CACHE_MS = 10 * 60e3;
+
 export type FaqEntry = { id: number; q: string; a: string };
-export interface Incoming { contactName: string; chatId: number; businessConnectionId?: string; text: string; photoFileId?: string }
+export interface Incoming { contactName: string; chatId: number; businessConnectionId?: string; text: string; photoFileId?: string; member?: boolean | null }
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+
+const fmtDate = (ms: number) => new Date(ms + 8 * 3600e3).toISOString().slice(0, 10);
 
 export class PersonaDesk {
   constructor(
@@ -206,7 +213,7 @@ export class PersonaDesk {
             (this.faq.length ? `\n\n## Owner FAQ (authoritative)\nIf the message asks one of these, answer using ONLY the owner's answer, rephrased short and casual in his style ("bro"), and do not escalate. ` +
               `Never add facts, numbers or promises that are not in the answer. If no entry fits, follow the rules above.\n` +
               this.faq.map(f => `Q: ${f.q}\nA: ${f.a}`).join("\n\n") : "") },
-          { role: "user", content: `Message from ${msg.contactName}:\n${msg.text}` },
+          { role: "user", content: `Message from ${msg.contactName} (${msg.member === true ? "existing VIP member" : msg.member === false ? "not a member" : "membership unknown"}):\n${msg.text}` },
         ],
       });
       const j = JSON.parse(r.content || "{}");
@@ -230,7 +237,10 @@ export class PersonaDesk {
     this.cur = this.effective(st.persona);
     if (!this.cfg.enabled) return;
     st.pending ??= [];
-    const head = `👤 ${msg.contactName}${msg.businessConnectionId ? " (akun pribadimu)" : ""}:\n"${clip(msg.text, 800)}"`;
+    const member = await this.memberStatus(st, msg.chatId);
+    msg = { ...msg, member };
+    const badge = member === true ? "Member ✅" : member === false ? "Bukan member" : "Member: ? (belum ada daftar/grup)";
+    const head = `👤 ${msg.contactName}${msg.businessConnectionId ? " (akun pribadimu)" : ""} · ${badge}\n🆔 ${msg.chatId}\n"${clip(msg.text, 800)}"`;
     const target0: Target = { chatId: msg.chatId, businessConnectionId: msg.businessConnectionId };
 
     // Hard block: possible minors / consent issues. Refuse, alert owner, no draft, no LLM.
@@ -260,7 +270,8 @@ export class PersonaDesk {
       await this.store.put(st);
       await this.out.toContact(target, this.withDisclosure(this.cfg.proofHoldingText || "siap bos, admin cek dulu ya 🙏"));
       const cap = `💸 Cek pembayaran #${id}\n${head}\n\nBot TIDAK mengonfirmasi pembayaran/akses VIP. Cek sendiri lalu balas.`;
-      const btns = [[{ text: "✍️ Balas", data: `p:edit:${id}` }, { text: "🙈 Abaikan", data: `p:reject:${id}` }]];
+      const btns: Button[][] = [[{ text: "✍️ Balas", data: `p:edit:${id}` }, { text: "🙈 Abaikan", data: `p:reject:${id}` }]];
+      if (member !== true) btns.push([{ text: "⭐ Jadikan member", data: `m:add:${msg.chatId}` }]);
       if (msg.photoFileId && this.out.toOwnerPhoto) await this.out.toOwnerPhoto(msg.photoFileId, cap, btns);
       else await this.out.toOwner(cap, btns);
       return;
@@ -268,7 +279,8 @@ export class PersonaDesk {
 
     // Edit-service order or price: draft the edit pricelist image (prices live only in the image).
     const editImg = st.persona?.editPricelistFileId;
-    if (this.isEditRequest(msg.text) && editImg && this.out.toContactPhoto) {
+    const editAsk = this.isEditRequest(msg.text);
+    if (editAsk && member !== false && editImg && this.out.toContactPhoto) {
       const caption = this.cfg.editPricelistCaption || "ini pricelist edit nya bro, kirim materi & brief kalau mau order ya 🙏";
       if (!this.cfg.approvalMode && this.cfg.autoSend) {
         await this.out.toContactPhoto(target, editImg, this.withDisclosure(caption));
@@ -284,7 +296,8 @@ export class PersonaDesk {
       return;
     }
     const editCustom = this.isEditCustom(msg.text);
-    const payIntent = !editCustom && this.isPayIntent(msg.text);
+    const nonMemberEdit = editAsk && member === false;
+    const payIntent = !editCustom && !nonMemberEdit && this.isPayIntent(msg.text);
     if (payIntent && st.persona?.payMode === "bca") {
       const reply = this.cfg.bcaText || "siap bos 🙏 transfer ke BCA 6042976624 a.n. MF ya, no rek juga ada di link https://esse-kuning-website.vercel.app/ . kirim bukti transfer kalau udah";
       if (!this.cfg.approvalMode && this.cfg.autoSend) {
@@ -320,7 +333,7 @@ export class PersonaDesk {
     }
     const d = editCustom
       ? { reply: "", escalate: true, reason: "permintaan edit custom/kompleks" }
-      : this.isPriceQuestion(msg.text)
+      : (nonMemberEdit && this.cfg.pricelistUrl) || this.isPriceQuestion(msg.text)
       ? { reply: (this.cfg.pricelistText || "cek pricelist di sini ya bro 👉 {url}").replace("{url}", this.cfg.pricelistUrl!), escalate: false, reason: "" }
       : await this.draft(msg);
     if (payIntent && !d.escalate) { d.escalate = true; d.reason = "pelanggan siap bayar"; }
@@ -352,6 +365,54 @@ export class PersonaDesk {
       [[{ text: "✅ Kirim", data: `p:approve:${id}` }, { text: "✏️ Edit", data: `p:edit:${id}` }, { text: "❌ Tolak", data: `p:reject:${id}` }]]);
   }
 
+  /** true = member (manual list or VIP group), false = not, null = nothing configured to check against. */
+  async memberStatus(st: UserState, userId: number): Promise<boolean | null> {
+    const o = st.persona ?? {};
+    const now = this.now();
+    if ((o.members ?? []).some(m => m.id === userId && (!m.until || m.until > now))) return true;
+    const groups = o.vipGroups ?? [];
+    if (groups.length && this.out.isGroupMember) {
+      for (const g of groups) {
+        const k = `${g.id}:${userId}`, c = groupCache.get(k);
+        let v: boolean;
+        if (c && now - c.at < GROUP_CACHE_MS) v = c.v;
+        else {
+          try { v = await this.out.isGroupMember(g.id, userId); } catch { v = false; }
+          groupCache.set(k, { v, at: now });
+        }
+        if (v) return true;
+      }
+    }
+    return o.members?.length || groups.length ? false : null;
+  }
+
+  async addMember(userId: number, days?: number, name?: string): Promise<string> {
+    const st = await this.owner();
+    const o = (st.persona ??= {});
+    const prev = (o.members ?? []).find(m => m.id === userId);
+    const nm = name || prev?.name || (st.pending ?? []).find(p => p.contactChatId === userId)?.contactName || String(userId);
+    const until = days && days > 0 ? this.now() + days * 864e5 : undefined;
+    o.members = [...(o.members ?? []).filter(m => m.id !== userId), { id: userId, name: nm.slice(0, 100), until }];
+    await this.store.put(st);
+    return `⭐ ${nm} (${userId}) jadi member${until ? ` sampai ${fmtDate(until)}` : " (tanpa batas)"}.`;
+  }
+
+  async addVipGroup(id: number, title: string): Promise<string> {
+    const st = await this.owner();
+    const o = (st.persona ??= {});
+    o.vipGroups = [...(o.vipGroups ?? []).filter(g => g.id !== id), { id, title: title.slice(0, 100) }];
+    await this.store.put(st);
+    return `✅ Grup VIP "${title}" terdaftar (${o.vipGroups.length} grup). Anggota grup ini otomatis dianggap member.`;
+  }
+
+  /** Owner replied /member to a bot card: pull the contact id from its 🆔 line. */
+  async memberFromCard(cardText: string, days?: number): Promise<string> {
+    const m = cardText.match(/🆔 (-?\d+)/);
+    if (!m) return "Tidak menemukan 🆔 di pesan itu. Pakai /member <user_id> [hari].";
+    const nm = cardText.match(/👤 (.+?)(?: \(akun pribadimu\))? · /)?.[1];
+    return this.addMember(Number(m[1]), days, nm);
+  }
+
   /** Owner sets the payment QR (file_id of a photo). */
   async setQr(fileId: string): Promise<string> {
     const st = await this.owner();
@@ -370,7 +431,7 @@ export class PersonaDesk {
 
   /** Owner persona-editing commands. Returns null if the text is not one of them. */
   async onOwnerCommand(text: string): Promise<{ text: string; buttons?: Button[][] } | null> {
-    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona|setqr|setpricelist|bayarbca|bayarqris|tambahinfo|info|hapusinfo)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
+    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona|setqr|setpricelist|bayarbca|bayarqris|tambahinfo|info|hapusinfo|member|hapusmember|daftarmember|grupvip|hapusgrupvip)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
     if (!m) return null;
     const cmd = m[1].toLowerCase(), arg = m[2].trim();
     const st = await this.owner();
@@ -389,6 +450,31 @@ export class PersonaDesk {
     }
     switch (cmd) {
       case "persona": return { text: this.describe(st) };
+      case "member": {
+        const [idS, daysS] = arg.split(/\s+/);
+        if (!/^\d+$/.test(idS || "")) return { text: "Pakai: /member <user_id> [hari], atau balas (reply) kartu draf/eskalasi dengan /member [hari]." };
+        return { text: await this.addMember(Number(idS), daysS ? Number(daysS) : undefined) };
+      }
+      case "hapusmember": {
+        const id = Number(arg);
+        const before = o.members?.length ?? 0;
+        o.members = (o.members ?? []).filter(m => m.id !== id);
+        return before === o.members.length ? { text: `Member ${arg || "?"} tidak ditemukan. Lihat /daftarmember` } : save(`🗑️ Member ${id} dihapus.`);
+      }
+      case "daftarmember": {
+        const now = this.now();
+        return { text: o.members?.length ? "⭐ Daftar member:\n\n" + o.members.map(m => `${m.name} · ${m.id} · ${m.until ? (m.until > now ? `s/d ${fmtDate(m.until)}` : `kedaluwarsa ${fmtDate(m.until)}`) : "tanpa batas"}`).join("\n") +
+          `\n\nGrup VIP: ${o.vipGroups?.length ?? 0} (lihat /grupvip)` : `Belum ada member manual. Tambah: /member <user_id> [hari]\nGrup VIP: ${o.vipGroups?.length ?? 0} (lihat /grupvip)` };
+      }
+      case "grupvip":
+        return { text: o.vipGroups?.length ? "👥 Grup VIP terdaftar:\n" + o.vipGroups.map(g => `${g.title} · ${g.id}`).join("\n") + "\n\nHapus: /hapusgrupvip <id>" :
+          "Belum ada grup VIP. Jadikan bot admin di grup VIP, lalu kirim /setgrupvip di grup itu." };
+      case "hapusgrupvip": {
+        const id = Number(arg);
+        const before = o.vipGroups?.length ?? 0;
+        o.vipGroups = (o.vipGroups ?? []).filter(g => g.id !== id);
+        return before === o.vipGroups.length ? { text: `Grup ${arg || "?"} tidak ditemukan. Lihat /grupvip` } : save(`🗑️ Grup ${id} dihapus.`);
+      }
       case "tambahinfo": {
         const i = arg.indexOf("|");
         const q = i < 0 ? "" : arg.slice(0, i).trim(), a = i < 0 ? "" : arg.slice(i + 1).trim();
@@ -453,6 +539,7 @@ export class PersonaDesk {
       `\nSalam pembuka (18+):\n${eff.ageGateText}`,
       `\nContoh chat: ${o.contoh?.length ?? 0} (lihat /contohku)`,
       `Info/FAQ: ${o.faq?.length ?? 0} (lihat /info)`,
+      `Member manual: ${o.members?.length ?? 0} (/daftarmember) · Grup VIP: ${o.vipGroups?.length ?? 0} (/grupvip)`,
       `QR pembayaran: ${o.qrFileId ? "✅ tersimpan" : "❌ belum (kirim foto dengan caption /setqr)"}`,
       `Mode bayar: ${o.payMode === "bca" ? "🏦 BCA (transfer)" : "📷 QRIS"} (ganti: /bayarbca, /bayarqris)`,
       `Pricelist edit: ${o.editPricelistFileId ? "✅ tersimpan" : "❌ belum (kirim foto dengan caption /setpricelist)"}`,
@@ -465,8 +552,10 @@ export class PersonaDesk {
   async onOwnerAction(data: string): Promise<string> {
     const st = await this.owner();
     if (data === "pa:on") { (st.persona ??= {}).autoSend = true; await this.store.put(st); return "⚠️ Auto-balas ON. Matikan kapan saja dengan /autobalas off"; }
-    if (data === "pa:reset") { st.persona = { qrFileId: st.persona?.qrFileId, editPricelistFileId: st.persona?.editPricelistFileId, payMode: st.persona?.payMode, faq: st.persona?.faq }; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
+    if (data === "pa:reset") { st.persona = { qrFileId: st.persona?.qrFileId, editPricelistFileId: st.persona?.editPricelistFileId, payMode: st.persona?.payMode, faq: st.persona?.faq, members: st.persona?.members, vipGroups: st.persona?.vipGroups }; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
     if (data === "pa:cancel") return "Dibatalkan, tidak ada yang berubah.";
+    const mm = data.match(/^m:add:(-?\d+)$/);
+    if (mm) return this.addMember(Number(mm[1]));
     const m = data.match(/^p:(approve|edit|reject):(\d+)$/);
     if (!m) return "Aksi tidak dikenal.";
     const p = st.pending?.find(x => x.id === +m[2]);

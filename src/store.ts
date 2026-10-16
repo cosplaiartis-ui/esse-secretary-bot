@@ -12,6 +12,8 @@ export interface PersonaOverrides {
   gaya?: string; layanan?: string; vip?: string; info?: string; salam?: string;
   contoh?: { id: number; text: string }[];
   autoSend?: boolean;
+  members?: { id: number; name: string; until?: number }[];   // manual member list (until = expiry ms)
+  vipGroups?: { id: number; title: string }[];   // VIP groups where the bot is admin
   faq?: { id: number; q: string; a: string }[];   // owner knowledge base
   qrFileId?: string;   // Telegram file_id of the payment QR photo
   editPricelistFileId?: string;
