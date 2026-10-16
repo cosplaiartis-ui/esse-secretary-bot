@@ -145,3 +145,14 @@ Flow for an incoming third-party message:
 ### Limits
 - Persona has no conversation memory yet (each message drafted alone).
 - No per-contact rate limiting; approval mode bounds the risk, add limits before enabling autoSend.
+
+## v3: Owner income tracking
+- `/masuk <jumlah> [keterangan]`, `/keluar`, `/pendapatan` (today), `/hapusmasuk <id>`; owner only
+  (`OWNER_USER_ID` or first `ALLOWED_USER_IDS`). Amounts: 50000, 50.000, 50rb, 50k, 1,5jt, Rp 75.000
+  (`src/money.ts`). LLM tools `add_income`, `add_expense`, `income_today`, `delete_income` handle phrasing
+  like "dapet 50rb dari VIP".
+- Records stored in the owner's state with UTC timestamps, grouped by local day in the owner's tz.
+- Daily report: the tick sends the previous local day's report (count, total `Rp50.000` format,
+  breakdown by keterangan) once the local date has changed, i.e. at 00:00 Asia/Makassar or at the first
+  later tick (catch-up). `lastMoneyReportDay` guarantees once per day. Records older than 90 days are pruned.
+- Persona mode never reads or exposes this data.
