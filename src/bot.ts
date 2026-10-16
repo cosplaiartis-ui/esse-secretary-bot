@@ -1,4 +1,4 @@
-import { Bot, InlineKeyboard } from "grammy";
+import { Api, Bot, InlineKeyboard } from "grammy";
 import { Secretary } from "./service.js";
 import { SecretaryBrain } from "./brain.js";
 import { PersonaDesk, loadPersona, Outbox, Button } from "./persona.js";
@@ -17,16 +17,26 @@ const kb = (rows?: Button[][]) => {
   return k;
 };
 
+export function ownerId(): number { return Number(process.env.OWNER_USER_ID) || allowlist()[0]; }
+
+export function makeOutbox(api: Api, ownerId: number): Outbox {
+  return {
+    toOwner: async (text, buttons) => { if (ownerId) await api.sendMessage(ownerId, text, { reply_markup: kb(buttons) }); },
+    toContact: async (t, text) => { await api.sendMessage(t.chatId, text, t.businessConnectionId ? { business_connection_id: t.businessConnectionId } : {}); },
+    toContactPhoto: async (t, fileId, caption) => {
+      await api.sendPhoto(t.chatId, fileId, { caption, ...(t.businessConnectionId ? { business_connection_id: t.businessConnectionId } : {}) });
+    },
+    toOwnerPhoto: async (fileId, caption, buttons) => { if (ownerId) await api.sendPhoto(ownerId, fileId, { caption, reply_markup: kb(buttons) }); },
+  };
+}
+
 export function createBot(token: string, store: Store, llm: LLM | null = llmFromEnv()): Bot {
   const bot = new Bot(token);
   const allowed = allowlist();
   const ownerId = Number(process.env.OWNER_USER_ID) || allowed[0];
   const sec = new Secretary(store, Date.now, ownerId);
   const brain = new SecretaryBrain(sec, llm);
-  const out: Outbox = {
-    toOwner: async (text, buttons) => { if (ownerId) await bot.api.sendMessage(ownerId, text, { reply_markup: kb(buttons) }); },
-    toContact: async (t, text) => { await bot.api.sendMessage(t.chatId, text, t.businessConnectionId ? { business_connection_id: t.businessConnectionId } : {}); },
-  };
+  const out = makeOutbox(bot.api, ownerId);
   const persona = new PersonaDesk(store, ownerId, llm, out, loadPersona());
   const verifiedConnections = new Map<string, boolean>();
 
@@ -35,6 +45,8 @@ export function createBot(token: string, store: Store, llm: LLM | null = llmFrom
     const uid = ctx.from.id;
     if (allowed.includes(uid)) {
       if (uid === ownerId) {
+        const rp = ctx.message.reply_to_message?.photo;
+        if (/^\/setqr\b/i.test(ctx.message.text) && rp?.length) { await ctx.reply(await persona.setQr(rp[rp.length - 1].file_id)); return; }
         const pc = await persona.onOwnerCommand(ctx.message.text);
         if (pc) { await ctx.reply(pc.text, { reply_markup: kb(pc.buttons) }); return; }
       }
@@ -50,6 +62,19 @@ export function createBot(token: string, store: Store, llm: LLM | null = llmFrom
     await persona.onIncoming({ contactName: `${name} (id ${uid})`, chatId: ctx.chat.id, text: ctx.message.text });
   });
 
+  // Photos: owner /setqr, customers' payment proofs.
+  bot.chatType("private").on("message:photo", async ctx => {
+    const uid = ctx.from.id;
+    const ph = ctx.message.photo, fileId = ph[ph.length - 1].file_id, cap = ctx.message.caption ?? "";
+    if (uid === ownerId) {
+      await ctx.reply(/^\/setqr\b/i.test(cap) ? await persona.setQr(fileId) : "Foto diterima. Untuk menyimpan sebagai QR pembayaran, kirim dengan caption /setqr.");
+      return;
+    }
+    if (allowed.includes(uid) || !ownerId) return;
+    const name = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") + (ctx.from.username ? ` @${ctx.from.username}` : "");
+    await persona.onIncoming({ contactName: `${name} (id ${uid})`, chatId: ctx.chat.id, text: cap, photoFileId: fileId });
+  });
+
   // Owner quick actions (Approve / Edit / Reject).
   bot.on("callback_query:data", async ctx => {
     if (ctx.from.id !== ownerId) { await ctx.answerCallbackQuery(); return; }
@@ -63,7 +88,7 @@ export function createBot(token: string, store: Store, llm: LLM | null = llmFrom
     const c = ctx.businessConnection;
     verifiedConnections.set(c.id, c.user.id === ownerId && c.is_enabled);
   });
-  bot.on("business_message:text", async ctx => {
+  bot.on(["business_message:text", "business_message:photo"], async ctx => {
     const m = ctx.businessMessage;
     const cid = m.business_connection_id;
     if (!cid) return;
@@ -74,7 +99,8 @@ export function createBot(token: string, store: Store, llm: LLM | null = llmFrom
     if (!verifiedConnections.get(cid)) return;      // connection not owned by Fajrin
     if (!m.from || m.from.id === ownerId) return;   // Fajrin typing himself
     const name = [m.from.first_name, m.from.last_name].filter(Boolean).join(" ") + (m.from.username ? ` @${m.from.username}` : "");
-    await persona.onIncoming({ contactName: `${name} (id ${m.from.id})`, chatId: m.chat.id, businessConnectionId: cid, text: m.text });
+    await persona.onIncoming({ contactName: `${name} (id ${m.from.id})`, chatId: m.chat.id, businessConnectionId: cid, text: m.text ?? m.caption ?? "",
+      photoFileId: m.photo ? m.photo[m.photo.length - 1].file_id : undefined });
   });
 
   return bot;

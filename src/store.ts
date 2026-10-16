@@ -12,7 +12,10 @@ export interface PersonaOverrides {
   gaya?: string; layanan?: string; vip?: string; info?: string; salam?: string;
   contoh?: { id: number; text: string }[];
   autoSend?: boolean;
+  qrFileId?: string;   // Telegram file_id of the payment QR photo
 }
+
+export interface FollowUp { chatId: number; businessConnectionId?: string; contactName: string; dueAt: number; }
 
 export interface Pending {
   id: number;
@@ -22,6 +25,9 @@ export interface Pending {
   businessConnectionId?: string;
   incoming: string;
   draft?: string;
+  followup?: boolean;
+  photoFileId?: string;   // photo sent after the draft text (payment QR)
+  photoCaption?: string;
   reason?: string;
   created: number;
 }
@@ -41,6 +47,8 @@ export interface UserState {
   awaitingReplyFor?: number;
   seenContacts?: number[];
   persona?: PersonaOverrides;  // owner-edited persona (overrides persona.md/config soft fields)
+  followups?: FollowUp[];      // pricelist follow-ups waiting for the customer
+  followedUp?: Record<string, number>; // chatId -> time a follow-up was created (once per conversation)
   money?: Money[];            // owner-only income/expense log
   lastMoneyReportDay?: string; // YYYY-MM-DD (local) of the last day whose report was sent    // chat ids that already got the age gate  // pending id whose reply the owner is typing
 }

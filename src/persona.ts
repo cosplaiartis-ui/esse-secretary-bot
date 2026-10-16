@@ -21,6 +21,17 @@ export interface PersonaConfig {
   holdingText: string;
   escalationKeywords: string[];
   maxReplyChars: number;
+  pricelistUrl?: string;        // if set, plain price questions get this link instead of escalation
+  pricelistText?: string;       // "{url}" is replaced
+  priceWords?: string[];        // escalation keywords that are OK in a plain price question
+  payIntentPattern?: string;    // regex: customer ready to pay -> escalate with payHoldingText
+  payHoldingText?: string;
+  followUpMinutes?: number;     // after sending the pricelist, follow up if no reply (0 = off)
+  followUpText?: string;
+  proofPattern?: string;        // regex: customer says they paid -> escalate (bot never confirms payment)
+  proofHoldingText?: string;
+  qrReplyText?: string;         // text before the QR photo, e.g. "siap bos"
+  qrCaption?: string;
 }
 
 export const SAFE_DEFAULTS: PersonaConfig = {
@@ -44,9 +55,11 @@ export interface Target { chatId: number; businessConnectionId?: string }
 export interface Outbox {
   toOwner(text: string, buttons?: Button[][]): Promise<void>;
   toContact(target: Target, text: string): Promise<void>;
+  toContactPhoto?(target: Target, fileId: string, caption: string): Promise<void>;
+  toOwnerPhoto?(fileId: string, caption: string, buttons?: Button[][]): Promise<void>;
 }
 
-export interface Incoming { contactName: string; chatId: number; businessConnectionId?: string; text: string }
+export interface Incoming { contactName: string; chatId: number; businessConnectionId?: string; text: string; photoFileId?: string }
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
@@ -85,6 +98,62 @@ export class PersonaDesk {
   keywordHit(text: string): string | null {
     const t = text.toLowerCase();
     return this.cfg.escalationKeywords.find(k => new RegExp(`(^|[^a-z])${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`, "i").test(t)) ?? null;
+  }
+
+  /** Plain price/pricelist question (no payment intent, no other escalation topic). */
+  isPriceQuestion(text: string): boolean {
+    const c = this.cfg;
+    if (!c.pricelistUrl) return false;
+    if (!/(harga|price|pricelist|price ?list|paket|berapa|biaya|tarif|rate ?card|list)/i.test(text)) return false;
+    if (this.isPayIntent(text)) return false;
+    const allowed = new Set((c.priceWords ?? []).map(w => w.toLowerCase()));
+    const t = text.toLowerCase();
+    return !c.escalationKeywords.some(k => !allowed.has(k.toLowerCase()) &&
+      new RegExp(`(^|[^a-z])${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`, "i").test(t));
+  }
+  private matches(p: string | undefined, text: string): boolean {
+    try { return !!p && new RegExp(p, "i").test(text); } catch { return false; }
+  }
+  isPayIntent(text: string): boolean {
+    const p = this.cfg.payIntentPattern;
+    try { return !!p && new RegExp(p, "i").test(text); } catch { return false; }
+  }
+
+  /** Send to a contact; if the message carries the pricelist link, schedule a one-time follow-up. */
+  private async sendContact(st: UserState, t: Target, contactName: string, text: string) {
+    await this.out.toContact(t, text);
+    const url = this.cfg.pricelistUrl, mins = this.cfg.followUpMinutes ?? 0;
+    const key = String(t.chatId);
+    if (url && mins > 0 && text.includes(url) && !(st.followedUp ?? {})[key] && !(st.followups ?? []).some(f => f.chatId === t.chatId)) {
+      (st.followups ??= []).push({ chatId: t.chatId, businessConnectionId: t.businessConnectionId, contactName, dueAt: this.now() + mins * 60e3 });
+    }
+  }
+
+  /** Called from the tick: create due pricelist follow-ups (draft in approval mode, direct in auto mode). */
+  async tickFollowups(): Promise<number> {
+    const st = await this.owner();
+    this.cur = this.effective(st.persona);
+    const due = (st.followups ?? []).filter(f => f.dueAt <= this.now());
+    if (!due.length) return 0;
+    st.followups = st.followups!.filter(f => f.dueAt > this.now());
+    st.followedUp ??= {};
+    const text = this.cfg.followUpText || "gimana bro, jadi join? kabarin ya";
+    for (const f of due) {
+      st.followedUp[String(f.chatId)] = this.now();
+      const t: Target = { chatId: f.chatId, businessConnectionId: f.businessConnectionId };
+      if (!this.cfg.approvalMode && this.cfg.autoSend) {
+        await this.out.toContact(t, this.withDisclosure(text));
+        await this.out.toOwner(`🤖 Follow-up otomatis terkirim ke ${f.contactName}:\n"${text}"`);
+      } else {
+        const id = ++st.seq;
+        (st.pending ??= []).push({ id, kind: "approval", contactName: f.contactName, contactChatId: f.chatId,
+          businessConnectionId: f.businessConnectionId, incoming: "(belum membalas setelah dikirim pricelist)", draft: text, followup: true, created: this.now() });
+        await this.out.toOwner(`⏳ Follow-up #${id} untuk ${f.contactName} (belum balas setelah pricelist):\n"${text}"`,
+          [[{ text: "✅ Kirim", data: `p:approve:${id}` }, { text: "✏️ Edit", data: `p:edit:${id}` }, { text: "❌ Tolak", data: `p:reject:${id}` }]]);
+      }
+    }
+    await this.store.put(st);
+    return due.length;
   }
 
   blockHit(text: string): string | null {
@@ -135,6 +204,9 @@ export class PersonaDesk {
       return;
     }
     const target = target0;
+    // Customer replied: cancel any pending pricelist follow-up for this chat.
+    if (st.followups?.some(f => f.chatId === msg.chatId)) st.followups = st.followups.filter(f => f.chatId !== msg.chatId);
+    st.pending = st.pending.filter(p => !(p.followup && p.contactChatId === msg.chatId));
     // Age gate on first contact.
     st.seenContacts ??= [];
     if (this.cfg.ageGate && !st.seenContacts.includes(msg.chatId)) {
@@ -142,14 +214,51 @@ export class PersonaDesk {
       await this.store.put(st);
       await this.out.toContact(target0, this.cfg.ageGateText);
     }
-    const d = await this.draft(msg);
+    // Payment proof (photo or "udah transfer"): always escalate; the bot never confirms payment or grants VIP.
+    const proof = !!msg.photoFileId || this.matches(this.cfg.proofPattern, msg.text);
+    if (proof) {
+      const id = ++st.seq;
+      st.pending.push({ id, kind: "escalation", contactName: msg.contactName, contactChatId: msg.chatId,
+        businessConnectionId: msg.businessConnectionId, incoming: msg.text || "(foto)", reason: "bukti pembayaran", created: this.now() });
+      await this.store.put(st);
+      await this.out.toContact(target, this.withDisclosure(this.cfg.proofHoldingText || "siap bos, admin cek dulu ya 🙏"));
+      const cap = `💸 Cek pembayaran #${id}\n${head}\n\nBot TIDAK mengonfirmasi pembayaran/akses VIP. Cek sendiri lalu balas.`;
+      const btns = [[{ text: "✍️ Balas", data: `p:edit:${id}` }, { text: "🙈 Abaikan", data: `p:reject:${id}` }]];
+      if (msg.photoFileId && this.out.toOwnerPhoto) await this.out.toOwnerPhoto(msg.photoFileId, cap, btns);
+      else await this.out.toOwner(cap, btns);
+      return;
+    }
+
+    const payIntent = this.isPayIntent(msg.text);
+    const qr = st.persona?.qrFileId;
+    if (payIntent && qr && this.out.toContactPhoto) {
+      const reply = this.cfg.qrReplyText || "siap bos 🙏";
+      const caption = this.cfg.qrCaption || "scan ini ya bos, kirim bukti transfer kalau udah";
+      if (!this.cfg.approvalMode && this.cfg.autoSend) {
+        await this.out.toContact(target, reply);
+        await this.out.toContactPhoto(target, qr, this.withDisclosure(caption));
+        await this.out.toOwner(`🤖 QR pembayaran terkirim otomatis ke ${msg.contactName}.\n${head}`);
+        return;
+      }
+      const id = ++st.seq;
+      st.pending.push({ id, kind: "approval", contactName: msg.contactName, contactChatId: msg.chatId, businessConnectionId: msg.businessConnectionId,
+        incoming: msg.text, draft: reply, photoFileId: qr, photoCaption: caption, created: this.now() });
+      await this.store.put(st);
+      await this.out.toOwner(`💳 Pelanggan siap bayar #${id}\n${head}\n\nDraf:\n"${reply}"\n+ 📷 foto QR: "${caption}"`,
+        [[{ text: "✅ Kirim", data: `p:approve:${id}` }, { text: "✏️ Edit", data: `p:edit:${id}` }, { text: "❌ Tolak", data: `p:reject:${id}` }]]);
+      return;
+    }
+    const d = this.isPriceQuestion(msg.text)
+      ? { reply: (this.cfg.pricelistText || "cek pricelist di sini ya bro 👉 {url}").replace("{url}", this.cfg.pricelistUrl!), escalate: false, reason: "" }
+      : await this.draft(msg);
+    if (payIntent && !d.escalate) { d.escalate = true; d.reason = "pelanggan siap bayar"; }
 
     if (d.escalate) {
       const id = ++st.seq;
       st.pending.push({ id, kind: "escalation", contactName: msg.contactName, contactChatId: msg.chatId,
         businessConnectionId: msg.businessConnectionId, incoming: msg.text, reason: d.reason, created: this.now() });
       await this.store.put(st);
-      if (this.cfg.holdingReply) await this.out.toContact(target, this.withDisclosure(this.cfg.holdingText));
+      if (this.cfg.holdingReply) await this.out.toContact(target, this.withDisclosure(payIntent && this.cfg.payHoldingText ? this.cfg.payHoldingText : this.cfg.holdingText));
       await this.out.toOwner(`⚠️ Perlu kamu jawab #${id}\n${head}\n\nAlasan: ${d.reason}` +
         (this.cfg.holdingReply ? "\n(Balasan penahan sudah dikirim.)" : ""),
         [[{ text: "✍️ Balas", data: `p:edit:${id}` }, { text: "🙈 Abaikan", data: `p:reject:${id}` }]]);
@@ -157,7 +266,8 @@ export class PersonaDesk {
     }
 
     if (!this.cfg.approvalMode && this.cfg.autoSend) {
-      await this.out.toContact(target, this.withDisclosure(d.reply));
+      await this.sendContact(st, target, msg.contactName, this.withDisclosure(d.reply));
+      await this.store.put(st);
       await this.out.toOwner(`🤖 Terkirim otomatis ke ${msg.contactName}:\n"${d.reply}"\n\n${head}`);
       return;
     }
@@ -170,9 +280,17 @@ export class PersonaDesk {
       [[{ text: "✅ Kirim", data: `p:approve:${id}` }, { text: "✏️ Edit", data: `p:edit:${id}` }, { text: "❌ Tolak", data: `p:reject:${id}` }]]);
   }
 
+  /** Owner sets the payment QR (file_id of a photo). */
+  async setQr(fileId: string): Promise<string> {
+    const st = await this.owner();
+    (st.persona ??= {}).qrFileId = fileId;
+    await this.store.put(st);
+    return "✅ QR pembayaran disimpan. Dipakai saat pelanggan siap bayar.";
+  }
+
   /** Owner persona-editing commands. Returns null if the text is not one of them. */
   async onOwnerCommand(text: string): Promise<{ text: string; buttons?: Button[][] } | null> {
-    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
+    const m = text.match(/^\/(persona|setgaya|setlayanan|setvip|setinfo|contoh|contohku|hapuscontoh|autobalas|salam|resetpersona|setqr)(?:@\w+)?(?!\w)\s*([\s\S]*)$/i);
     if (!m) return null;
     const cmd = m[1].toLowerCase(), arg = m[2].trim();
     const st = await this.owner();
@@ -191,6 +309,7 @@ export class PersonaDesk {
     }
     switch (cmd) {
       case "persona": return { text: this.describe(st) };
+      case "setqr": return { text: "Kirim foto QR dengan caption /setqr, atau balas (reply) foto QR dengan /setqr." };
       case "contoh": {
         if (!arg) return { text: "Contoh: /contoh Them: kak ada promo?\nAdmin: halo kak, cek pin channel ya 🙏" };
         if (/fajrin/i.test(arg)) return { text: "❌ Contoh tidak boleh menyebut Fajrin." };
@@ -235,6 +354,8 @@ export class PersonaDesk {
       `\nInfo lain:\n${show(o.info)}`,
       `\nSalam pembuka (18+):\n${eff.ageGateText}`,
       `\nContoh chat: ${o.contoh?.length ?? 0} (lihat /contohku)`,
+      `QR pembayaran: ${o.qrFileId ? "✅ tersimpan" : "❌ belum (kirim foto dengan caption /setqr)"}`,
+      `Pricelist: ${eff.pricelistUrl ?? "-"} | follow-up ${eff.followUpMinutes ?? 0} menit`,
       `\n🔒 Aturan tetap (tidak bisa diubah): tanpa konten eksplisit, blokir di bawah umur, eskalasi harga/bayar/VIP/custom/janji, tidak menyebut Fajrin.`,
     ].join("\n");
   }
@@ -243,7 +364,7 @@ export class PersonaDesk {
   async onOwnerAction(data: string): Promise<string> {
     const st = await this.owner();
     if (data === "pa:on") { (st.persona ??= {}).autoSend = true; await this.store.put(st); return "⚠️ Auto-balas ON. Matikan kapan saja dengan /autobalas off"; }
-    if (data === "pa:reset") { st.persona = {}; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
+    if (data === "pa:reset") { st.persona = { qrFileId: st.persona?.qrFileId }; await this.store.put(st); return "🔄 Persona direset ke default. Auto-balas OFF."; }
     if (data === "pa:cancel") return "Dibatalkan, tidak ada yang berubah.";
     const m = data.match(/^p:(approve|edit|reject):(\d+)$/);
     if (!m) return "Aksi tidak dikenal.";
@@ -251,7 +372,11 @@ export class PersonaDesk {
     if (!p) return "Sudah diproses atau tidak ditemukan.";
     if (m[1] === "approve") {
       if (!p.draft) return "Tidak ada draf. Pakai ✍️ Balas.";
-      await this.out.toContact(this.target(p), this.withDisclosure(p.draft));
+      this.cur = this.effective(st.persona);
+      if (p.photoFileId && this.out.toContactPhoto) {
+        await this.out.toContact(this.target(p), p.draft);
+        await this.out.toContactPhoto(this.target(p), p.photoFileId, this.withDisclosure(p.photoCaption || ""));
+      } else await this.sendContact(st, this.target(p), p.contactName, this.withDisclosure(p.draft));
       this.drop(st, p.id); await this.store.put(st);
       return `✅ Terkirim ke ${p.contactName}.`;
     }
@@ -276,7 +401,8 @@ export class PersonaDesk {
     if (/^\/batal\b/.test(text)) { await this.store.put(st); return "Dibatalkan."; }
     const p = st.pending?.find(x => x.id === id);
     if (!p) { await this.store.put(st); return "Item sudah tidak ada."; }
-    await this.out.toContact(this.target(p), text); // written by Fajrin himself: no AI disclosure
+    this.cur = this.effective(st.persona);
+    await this.sendContact(st, this.target(p), p.contactName, text); // written by Fajrin himself: no AI disclosure
     this.drop(st, p.id); await this.store.put(st);
     return `✅ Balasanmu terkirim ke ${p.contactName}.`;
   }
